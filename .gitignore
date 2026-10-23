@@ -1,0 +1,4 @@
+.smoke-profile*
+.cft/
+.diag-tmp/
+*.log

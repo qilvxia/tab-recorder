@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>录制状态</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <span class="logo"></span>
+    <b>标签页录制器</b>
+    <span id="stateChip" class="chip idle">空闲</span>
+  </header>
+
+  <!-- 录制中 -->
+  <section id="recBox">
+    <div class="statMain">
+      <div class="lesson" id="curLesson">…</div>
+      <div class="meta"><span id="curSeq"></span><span id="segTime"></span></div>
+    </div>
+    <div class="tip small" id="detTitle"></div>
+    <div class="grid">
+      <div><i>已保存</i><b id="segCount">0 节</b></div>
+      <div><i>总时长</i><b id="totalTime">00:00</b></div>
+      <div><i>已录大小</i><b id="totalSize">0 MB</b></div>
+      <div><i>保存中</i><b id="saving">0</b></div>
+    </div>
+    <div class="btnRow">
+      <button id="pauseBtn">暂停</button>
+      <button id="stopBtn" class="danger">停止并保存</button>
+    </div>
+    <div class="tip small" id="recTip"></div>
+  </section>
+
+  <!-- 空闲/结束 -->
+  <section id="idleBox" class="hidden">
+    <div class="hint" id="idleHint">没有正在进行的录制。</div>
+    <div class="tip" id="lastResult"></div>
+    <button id="closeBtn">关闭本窗口</button>
+  </section>
+
+  <script src="live.js"></script>
+</body>
+</html>

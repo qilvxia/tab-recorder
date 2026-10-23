@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>标签页录制器 · 设置</title>
+  <link rel="stylesheet" href="options.css">
+</head>
+<body>
+  <main>
+    <h1>标签页录制器 · 设置</h1>
+
+    <section>
+      <h2>画质与格式</h2>
+      <div class="field"><label>文件格式</label>
+        <select id="format">
+          <option value="mp4">MP4（H.264 + AAC，兼容性最好）</option>
+          <option value="webm">WebM（VP9 + Opus，体积更小）</option>
+        </select>
+        <p class="desc">MP4 由浏览器直接录制时个别播放器进度条可能异常（时长元数据为 0），用 ffmpeg <code>-c copy</code> 重封装一次即可修复；WebM 无此问题。</p>
+      </div>
+      <div class="field"><label>视频码率</label>
+        <select id="videoBitrate">
+          <option value="2000000">2 Mbps（流畅，约 0.9 GB/小时）</option>
+          <option value="4000000">4 Mbps（均衡，约 1.8 GB/小时）</option>
+          <option value="8000000">8 Mbps（高清，约 3.6 GB/小时）</option>
+          <option value="12000000">12 Mbps（极高，约 5.4 GB/小时）</option>
+        </select>
+      </div>
+      <div class="field"><label>帧率</label>
+        <select id="frameRate">
+          <option value="15">15 fps（讲义类内容足够）</option>
+          <option value="24">24 fps</option>
+          <option value="30">30 fps（推荐）</option>
+          <option value="60">60 fps</option>
+        </select>
+      </div>
+      <div class="field"><label>音频码率</label>
+        <select id="audioBitrate">
+          <option value="96000">96 kbps</option>
+          <option value="128000">128 kbps（推荐）</option>
+          <option value="192000">192 kbps</option>
+        </select>
+      </div>
+    </section>
+
+    <section>
+      <h2>自动停止</h2>
+      <div class="field"><label>延时开始</label>
+        <div class="inline"><input type="number" id="startDelaySeconds" min="0" max="60" step="1"> 秒后才开始录制（0 = 立即开始；倒计期间页面声音正常，可随时取消）</div>
+      </div>
+      <div class="field"><label><input type="checkbox" id="heartbeatInject"> 录制期间周期性补注入标题检测脚本</label>
+        <p class="desc">用于覆盖晚出现的播放器 iframe；若面板在录制开始后异常关闭，可关闭此项排查。</p>
+      </div>
+      <div class="field"><label><input type="checkbox" id="autoLiveWindow"> 开始录制时自动打开独立状态窗</label>
+        <p class="desc">状态窗是普通窗口，不怕焦点切换；也可随时通过面板底部「状态窗」链接手动打开。</p>
+      </div>
+      <div class="field"><label><input type="checkbox" id="stopOnVideoEnd"> 页面视频播放完毕后自动停止（单段模式）</label></div>
+      <div class="field"><label>标签页持续静默超过</label>
+        <div class="inline"><input type="number" id="silenceStopSeconds" min="0" step="1"> 秒后停止整个录制（0 = 关闭；适合“课程放完自动收工”）</div>
+      </div>
+      <div class="field"><label>最长录制保护</label>
+        <div class="inline"><input type="number" id="maxDurationMinutes" min="0" step="10"> 分钟（0 = 关闭）</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>自动分节（连播课程）</h2>
+      <p class="desc">开启“自动分节”模式后，以下信号触发切段并另存一个文件。三重信号去抖合并，默认配置即可良好工作。</p>
+      <div class="field"><label><input type="checkbox" id="segOnEnded"> 视频播放完毕（页面 video 元素）</label></div>
+      <div class="field"><label><input type="checkbox" id="segOnUrl"> 页面网址变化（切换课时）</label></div>
+      <div class="field"><label><input type="checkbox" id="segOnSilence"> 页面静默间隙（适配 canvas 播放器）</label>
+        <div class="inline"><input type="number" id="segSilenceSeconds" min="2" step="1"> 秒以上视为换节</div>
+      </div>
+      <div class="field"><label>切节去抖</label>
+        <div class="inline"><input type="number" id="segDebounceMs" min="300" step="100"> 毫秒</div>
+      </div>
+    </section>
+
+    <section>
+      <h2>命名与保存</h2>
+      <div class="field"><label>课时名元素选择器（CSS）</label>
+        <input type="text" id="lessonSelector" placeholder="h1">
+        <p class="desc">用于自动分节时提取每节课的名称。默认取页面 h1。多数网课站点开箱即用，可用开发者工具确认标题元素。</p>
+      </div>
+      <div class="field"><label>课时名前缀去除（正则）</label>
+        <input type="text" id="lessonPrefix" placeholder="^正在播放[:：]\s*">
+        <p class="desc">例如去掉“正在播放：”前缀，让文件名只剩课时名。</p>
+      </div>
+      <div class="field"><label>课程名元素选择器（CSS，可选）</label>
+        <input type="text" id="courseSelector" placeholder="留空则使用弹出面板中填写的目录名">
+      </div>
+      <div class="field"><label>保存目录（下载文件夹下的子目录）</label>
+        <input type="text" id="saveSubdir" placeholder="TabRecorder">
+        <p class="desc">文件保存在浏览器下载目录下的该子目录，留空 = 直接存下载根目录。若保存时弹出“另存为”窗口，请到浏览器 设置 → 下载，关闭「下载前询问每个文件的保存位置」（扩展无法覆盖该设置）。</p>
+      </div>
+      <div class="field"><label>单段模式文件名模板</label>
+        <input type="text" id="filenameTemplate" placeholder="{title}_{date}-{time}">
+        <p class="desc">可用变量：{title} 页面标题、{date} 日期、{time} 时间、{seq} 序号。分节模式固定为“序号-课时名”。</p>
+      </div>
+    </section>
+
+    <div class="actions">
+      <button id="saveBtn" class="primary">保存设置</button>
+      <button id="resetBtn">恢复默认</button>
+      <span id="toast"></span>
+    </div>
+  </main>
+  <script src="options.js"></script>
+</body>
+</html>

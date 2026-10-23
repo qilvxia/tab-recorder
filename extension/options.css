@@ -1,0 +1,50 @@
+:root {
+  --bg: #f6f7f9;
+  --card: #ffffff;
+  --ink: #1c2430;
+  --sub: #66707e;
+  --line: #e3e6eb;
+  --brand: #2f6fed;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--ink); font: 14px/1.6 system-ui, "Microsoft YaHei", sans-serif; }
+main { max-width: 680px; margin: 24px auto 60px; padding: 0 16px; }
+h1 { font-size: 20px; margin-bottom: 16px; }
+section {
+  background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+  padding: 16px 18px; margin-bottom: 14px;
+}
+h2 { font-size: 15px; margin-bottom: 10px; }
+.field { margin: 10px 0; }
+.field > label { display: block; font-weight: 600; font-size: 13.5px; margin-bottom: 4px; }
+.field label input[type="checkbox"] { margin-right: 6px; vertical-align: -2px; }
+.inline { display: flex; align-items: center; gap: 8px; margin-top: 4px; font-size: 13px; color: var(--sub); }
+.inline input[type="number"] {
+  width: 90px; padding: 5px 8px; font: inherit;
+  border: 1px solid var(--line); border-radius: 8px;
+}
+select, input[type="text"] {
+  width: 100%; max-width: 420px; padding: 6px 8px; font: inherit;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+}
+.desc { font-size: 12.5px; color: var(--sub); margin-top: 4px; }
+.desc.warn { color: #b25e00; }
+.desc code { background: #eef1f5; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.actions { display: flex; align-items: center; gap: 10px; margin-top: 4px; }
+button.primary {
+  padding: 9px 22px; font: inherit; font-weight: 600; cursor: pointer;
+  color: #fff; background: var(--brand); border: none; border-radius: 10px;
+}
+#resetBtn {
+  padding: 9px 18px; font: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card);
+}
+#pickDirBtn, #clearDirBtn {
+  padding: 5px 14px; font: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 8px; background: var(--card);
+}
+#pickDirBtn:disabled { opacity: .5; cursor: not-allowed; }
+#dirStatus { font-size: 12.5px; }
+.hidden { display: none !important; }
+#toast { font-size: 13px; color: #1e8e4e; opacity: 0; transition: opacity .3s; }
+#toast.show { opacity: 1; }
