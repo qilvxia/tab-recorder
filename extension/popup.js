@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 
 const DEFAULT_SETTINGS = {
   format: "mp4", videoBitrate: 4000000, frameRate: 30, audioBitrate: 128000,
-  startDelaySeconds: 0,
+  startDelaySeconds: 0, autoNext: true,
   lessonSelector: "h1", lessonPrefix: "^正在播放[:：]\\s*",
 };
 
@@ -63,6 +63,12 @@ async function init() {
     const host = new URL(tabInfo.url).hostname.replace(/^www\./, "");
     $("courseFolder").value = host;
   } catch (e) { $("courseFolder").value = ""; }
+  $("autoNext").checked = s.autoNext !== false;
+  $("autoNext").onchange = async () => {
+    const cur = await loadSettings();
+    cur.autoNext = $("autoNext").checked;
+    await chrome.storage.local.set({ settings: cur });
+  };
 
   $("startBtn").onclick = startRecording;
   $("stopBtn").onclick = async () => {

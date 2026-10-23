@@ -10,9 +10,97 @@
   if (window.__tabRecDetector) return;
   window.__tabRecDetector = true;
 
-  let cfg = { lessonSelector: "h1", courseSelector: "" };
+  let cfg = { lessonSelector: "h1", courseSelector: "", autoNext: false };
   let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0 };
   const seenVideos = new Set();
+
+  // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
+  let advTimers = [];
+
+  const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+
+  const NEXT_WORDS = ["下一节", "下一课", "下一集", "下一讲", "下一章", "下一个", "继续观看", "观看下一", "播放下一"];
+  function okAdvText(t) {
+    const s = String(t || "").replace(/\s+/g, " ").trim();
+    if (s.length < 2 || s.length > 40) return false;
+    if (s.includes("上一") || s.includes("最后")) return false;
+    return NEXT_WORDS.some((w) => s.includes(w));
+  }
+
+  // 策略①：点击文本含「下一节/继续观看」等的可见按钮/链接；<a> 用同页跳转（保持录制在原标签页）
+  function clickTextNext() {
+    for (const sel of ["a", "button", "[role='button']", "[onclick]"]) {
+      let els = [];
+      try { els = document.querySelectorAll(sel); } catch (e) { continue; }
+      for (const el of els) {
+        if (!visible(el)) continue;
+        const t = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+        if (!okAdvText(t)) continue;
+        if (el.tagName === "A" && el.href && !el.target) {
+          location.href = el.href;
+        } else {
+          el.click();
+        }
+        return `文本按钮「${t.slice(0, 20)}」`;
+      }
+    }
+    return "";
+  }
+
+  // 策略②：课程列表中当前高亮项的下一项
+  function clickListNext() {
+    let active = null;
+    try {
+      for (const el of document.querySelectorAll("[class*='active' i],[aria-current]")) {
+        if (!visible(el) || el.closest("nav,header,footer")) continue;
+        active = el;
+        break;
+      }
+    } catch (e) { return ""; }
+    if (!active) return "";
+    const li = active.closest("li");
+    let nextEl = li ? li.nextElementSibling : null;
+    if (!nextEl) {
+      const list = active.closest("ul,ol");
+      if (list) {
+        const items = [...list.querySelectorAll("li")];
+        const i = items.findIndex((x) => x.contains(active));
+        nextEl = items[i + 1] || null;
+      }
+    }
+    if (!nextEl) return "";
+    const target = nextEl.querySelector("a") || nextEl;
+    if (!visible(target)) return "";
+    if (target.tagName === "A" && target.href && !target.target) {
+      location.href = target.href;
+    } else {
+      target.click();
+    }
+    return "列表下一项";
+  }
+
+  function attemptAdvance() {
+    for (const v of document.querySelectorAll("video")) {
+      if (!v.paused && !v.ended) return; // 已有视频在播，无需连播
+    }
+    const how = clickTextNext() || clickListNext();
+    if (how) {
+      advTimers.forEach(clearTimeout);
+      advTimers = [];
+      console.info("[tabrec] 自动连播：", how);
+    }
+  }
+
+  function scheduleAdvance() {
+    if (!cfg.autoNext) return;
+    advTimers.forEach(clearTimeout);
+    advTimers = [setTimeout(attemptAdvance, 2000), setTimeout(attemptAdvance, 5000)];
+  }
+  function cancelAdvance() {
+    advTimers.forEach(clearTimeout);
+    advTimers = [];
+  }
+
 
   function isJunk(t) {
     const s = String(t || "").trim();
@@ -155,8 +243,10 @@
         last.ended = true;
         last.endedAt = Date.now();
         report();
+        scheduleAdvance(); // 分节模式：播完自动尝试播放下一节
       });
       v.addEventListener("playing", () => {
+        cancelAdvance(); // 视频恢复播放，无需连播
         if (last.ended) { last.ended = false; report(); }
       });
     });

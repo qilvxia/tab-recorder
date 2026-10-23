@@ -164,6 +164,7 @@
         type: "request-capture",
         tabId: pendingTabId,
         settings: pendingSettings,
+        mode,
       });
       if (!resp || !resp.ok || !resp.streamId) throw new Error((resp && resp.error) || "未获得捕获授权");
       await beginCapture(resp.streamId);

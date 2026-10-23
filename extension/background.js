@@ -32,7 +32,7 @@ async function sendOffscreen(msg, tries = 20) {
 }
 
 async function getSession() {
-  return (await chrome.storage.session.get(["recording", "tabId"])) || {};
+  return (await chrome.storage.session.get(["recording", "tabId", "mode"])) || {};
 }
 
 function setBadge(text, color) {
@@ -40,14 +40,18 @@ function setBadge(text, color) {
   chrome.action.setBadgeText({ text });
 }
 
-async function injectDetector(tabId, settings) {
+async function injectDetector(tabId, settings, mode) {
   // 注入失败自动重试（快速连测时页面常处于加载中），与其它逻辑解耦
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
       await chrome.scripting.executeScript({ target: { tabId, allFrames: true }, files: ["content-detect.js"] });
       chrome.tabs.sendMessage(tabId, {
         type: "detect-config",
-        cfg: { lessonSelector: (settings && settings.lessonSelector) || "h1", lessonPrefix: (settings && settings.lessonPrefix) || "" },
+        cfg: {
+          lessonSelector: (settings && settings.lessonSelector) || "h1",
+          lessonPrefix: (settings && settings.lessonPrefix) || "",
+          autoNext: mode === "segment" && (settings && settings.autoNext !== false),
+        },
       }).catch(() => {});
       return true;
     } catch (e) {
@@ -89,7 +93,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         try {
           const { tabId, settings, payload } = msg;
           await ensureOffscreen();
-          await chrome.storage.session.set({ recording: true, tabId, startedAt: Date.now() });
+          await chrome.storage.session.set({ recording: true, tabId, mode: payload.mode, startedAt: Date.now() });
           const resp = await sendOffscreen({ type: "offscreen-schedule", settings, payload, tabId });
           sendResponse(resp || { ok: true });
         } catch (e) {
@@ -109,7 +113,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               else resolve(id);
             });
           });
-          await injectDetector(msg.tabId, msg.settings);
+          await injectDetector(msg.tabId, msg.settings, msg.mode);
           sendResponse({ ok: true, streamId });
         } catch (e) {
           sendResponse({ ok: false, error: String(e && e.message || e) });
@@ -172,6 +176,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             if (!skip) {
               try {
                 await chrome.scripting.executeScript({ target: { tabId: st.tabId, allFrames: true }, files: ["content-detect.js"] });
+                // 补发 detect-config：晚出现的播放器 iframe 也需要拿到 cfg（含 autoNext）
+                const s = await chrome.storage.local.get("settings");
+                const st2 = await getSession();
+                await injectDetector(st.tabId, s.settings || {}, st2.mode);
               } catch (e) { /* 受限页/帧忽略 */ }
             }
           }
