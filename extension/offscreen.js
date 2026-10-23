@@ -30,7 +30,15 @@
   let splitTimer = null;
   let lastSplitAt = 0;
   let pendingFinalize = 0; // 正在收尾（blob→锚点注册）的段数：防"未注册先判完成"
-  const SEG = { debounceMs: 1500, silenceSec: 5 }; // 分节参数（去抖 / 静默切节阈值）
+  const SEG = {
+    debounceMs: 1500, silenceSec: 5,
+    urlStableMs: 3000, // URL 变化需稳定这么久才切节：进度/token 类参数会持续变化，永不稳定→不切
+    silenceGapMs: 30000, // 两次静默切节的最小间隔（防 audible 抖动）
+  };
+  // URL 稳定期状态：变化先挂起，稳定后才切（v2.2.1，治 5-8 秒碎片段）
+  let pendingUrl = "";
+  let lastUrlChangeAt = 0;
+  let lastSilenceSplitAt = 0;
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -231,6 +239,9 @@
     currentLesson = "";
     currentLessonSrc = "";
     lastUrl = payload.tabUrl || "";
+    pendingUrl = "";
+    lastUrlChangeAt = 0;
+    lastSilenceSplitAt = 0;
     silenceSince = null;
     silenceSplitFired = false;
     captureRequested = false;
@@ -377,6 +388,27 @@
     try { old.stop(); } catch (e) { console.warn(e); startSegment(); }
   }
 
+  // URL 变化统一入口：只挂起不切节，等稳定期由 tick 判定（content 与 SW 两条路径都走这里）
+  function onUrlChange(url) {
+    if (!url || url === lastUrl) return;
+    lastUrl = url;
+    pendingUrl = url;
+    lastUrlChangeAt = now();
+  }
+
+  // tick 周期检查：URL 已稳定且有待切变化 → 判定是否真换课
+  function checkPendingUrl() {
+    if (state !== "recording" || mode !== "segment") { pendingUrl = ""; return; }
+    if (!pendingUrl || now() - lastUrlChangeAt < SEG.urlStableMs) return;
+    pendingUrl = "";
+    // 第二道闸：换课必换标题——课时名与当前段相同且本段已有数据，视为同课误报
+    if (cur && cur.name && cur.name === currentLesson && cur.bytes > 0) {
+      console.info("[rec] url 稳定但课时名未变，不切节");
+      return;
+    }
+    requestSplit("url-change");
+  }
+
   // ---- 信号处理 ----
   function onContent(data) {
     if (!data) return;
@@ -393,13 +425,9 @@
       }
     }
     if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);
-    if (data.url && data.url !== lastUrl) {
-      const isFirstUrl = !lastUrl;
-      lastUrl = data.url;
-      if (!isFirstUrl && state === "recording" && mode === "segment") requestSplit("url-change");
-    }
+    if (data.url) onUrlChange(data.url);
     if (data.ended && state === "recording" && mode === "segment") {
-      requestSplit("video-ended");
+      requestSplit("video-ended"); // 播完是强信号，不受 URL 稳定期约束
     }
   }
 
@@ -409,8 +437,10 @@
       silenceSplitFired = false;
     } else if (state === "recording" && mode === "segment") {
       if (silenceSince === null) silenceSince = now();
-      if (!silenceSplitFired && now() - silenceSince >= SEG.silenceSec * 1000) {
+      if (!silenceSplitFired && now() - silenceSince >= SEG.silenceSec * 1000
+          && now() - lastSilenceSplitAt >= SEG.silenceGapMs) {
         silenceSplitFired = true;
+        lastSilenceSplitAt = now();
         requestSplit("silence-gap");
       }
     }
@@ -434,6 +464,7 @@
   function tick() {
     updateBadge();
     if (state === "stopping") { maybeFinish(); return; }
+    checkPendingUrl();
   }
 
   // ---- 消息入口 ----
@@ -452,11 +483,7 @@
       case "offscreen-status": sendResponse(status()); break;
       case "offscreen-content": onContent(msg.data); sendResponse({ ok: true }); break;
       case "offscreen-url":
-        if (msg.url && msg.url !== lastUrl) {
-          const isFirstUrl = !lastUrl;
-          lastUrl = msg.url;
-          if (!isFirstUrl && state === "recording" && mode === "segment") requestSplit("url-change(sw)");
-        }
+        onUrlChange(msg.url);
         sendResponse({ ok: true });
         break;
       case "offscreen-audible": onAudible(!!msg.audible); sendResponse({ ok: true }); break;

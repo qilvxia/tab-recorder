@@ -87,14 +87,16 @@
     if (how) {
       advTimers.forEach(clearTimeout);
       advTimers = [];
-      console.info("[tabrec] 自动连播：", how);
+      console.info("[tabrec] 自动连播：已点击", how);
+    } else {
+      console.info("[tabrec] 自动连播：未找到下一节入口（文本按钮/列表下一项均未命中）");
     }
   }
 
   function scheduleAdvance() {
     if (!cfg.autoNext) return;
     advTimers.forEach(clearTimeout);
-    advTimers = [setTimeout(attemptAdvance, 2000), setTimeout(attemptAdvance, 5000)];
+    advTimers = [setTimeout(attemptAdvance, 2000), setTimeout(attemptAdvance, 5000), setTimeout(attemptAdvance, 8000)];
   }
   function cancelAdvance() {
     advTimers.forEach(clearTimeout);
