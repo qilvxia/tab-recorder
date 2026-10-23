@@ -85,25 +85,33 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     switch (msg && msg.type) {
       case "start": {
+        // 预约式启动：此刻不取流（捕获推迟到倒计时归零，弹窗全程稳定）
         try {
           const { tabId, settings, payload } = msg;
-          // 签发一次性 streamId（数秒内有效，须尽快交给 offscreen 消费）
+          await ensureOffscreen();
+          await chrome.storage.session.set({ recording: true, tabId, startedAt: Date.now() });
+          const resp = await sendOffscreen({ type: "offscreen-schedule", settings, payload, tabId });
+          sendResponse(resp || { ok: true });
+        } catch (e) {
+          await chrome.storage.session.remove(["recording", "tabId", "startedAt"]);
+          setBadge("", "");
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+        break;
+      }
+      case "request-capture": {
+        // 倒计时归零，offscreen 请求真正开始捕获：此时才签发 streamId + 注入检测器
+        try {
           const streamId = await new Promise((resolve, reject) => {
-            chrome.tabCapture.getMediaStreamId({ targetTabId: tabId }, (id) => {
+            chrome.tabCapture.getMediaStreamId({ targetTabId: msg.tabId }, (id) => {
               const err = chrome.runtime.lastError;
               if (err || !id) reject(new Error((err && err.message) || "getMediaStreamId 失败"));
               else resolve(id);
             });
           });
-          await ensureOffscreen();
-          await injectDetector(tabId, settings);
-          await chrome.storage.session.set({ recording: true, tabId, startedAt: Date.now() });
-          setBadge("", "");
-          const resp = await sendOffscreen({ type: "offscreen-start", streamId, settings, payload, tabId });
-          sendResponse(resp || { ok: true });
+          await injectDetector(msg.tabId, msg.settings);
+          sendResponse({ ok: true, streamId });
         } catch (e) {
-          await chrome.storage.session.remove(["recording", "tabId", "startedAt"]);
-          setBadge("", "");
           sendResponse({ ok: false, error: String(e && e.message || e) });
         }
         break;

@@ -26,6 +26,14 @@
   let anchorPending = false;
   let finishDeadline = 0;
 
+  // 捕获后移：倒计时期不取流（点开始瞬间几乎无动作，弹窗不会被顶掉），
+  // 归零时才向 SW 要 streamId 开始捕获
+  let pendingSettings = null;
+  let pendingPayload = null;
+  let pendingTabId = null;
+  let captureRequested = false;
+  let startError = "";
+
   let countdownTimer = null;
   let countEndTs = 0;
   let lastBadge = "";
@@ -104,26 +112,45 @@
   }
 
   function beginRecording() {
-    if (state !== "countdown") return;
-    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    if (state !== "recording") return;
     resumeTs = now();
-    state = "recording";
     recorder = makeRecorder();
     recorder.start(1000);
   }
 
-  async function start(msg) {
-    settings = msg.settings || {};
-    payload = msg.payload || {};
+  // 倒计时归零 → 向 SW 要 streamId → 真正开始捕获与录制
+  async function requestCapture() {
+    if (state !== "countdown" || captureRequested) return;
+    captureRequested = true;
+    if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    try {
+      const resp = await chrome.runtime.sendMessage({
+        type: "request-capture",
+        tabId: pendingTabId,
+        settings: pendingSettings,
+      });
+      if (!resp || !resp.ok || !resp.streamId) throw new Error((resp && resp.error) || "未获得捕获授权");
+      await beginCapture(resp.streamId);
+    } catch (e) {
+      startError = String(e && e.message || e);
+      state = "idle";
+      stopLoops();
+      destroyExtra();
+      updateBadge();
+      chrome.runtime.sendMessage({
+        type: "recording-finished",
+        summary: { error: startError },
+      }).catch(() => {});
+    }
+  }
 
-    mime = pickMime(settings.format === "webm" ? "webm" : "mp4");
-    ext = mime.startsWith("video/mp4") ? "mp4" : "webm";
-
-    const videoMandatory = { chromeMediaSource: "tab", chromeMediaSourceId: msg.streamId };
-    const fps = Number(settings.frameRate);
+  async function beginCapture(streamId) {
+    if (state !== "countdown") return; // 用户已在预约期取消
+    const videoMandatory = { chromeMediaSource: "tab", chromeMediaSourceId: streamId };
+    const fps = Number(pendingSettings.frameRate);
     if (fps > 0) videoMandatory.maxFrameRate = fps;
     stream = await navigator.mediaDevices.getUserMedia({
-      audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: msg.streamId } },
+      audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
       video: { mandatory: videoMandatory },
     });
 
@@ -136,10 +163,33 @@
 
     stream.getVideoTracks()[0].addEventListener("ended", () => stopAll("stream-ended"));
 
+    if (state !== "countdown") {
+      // getUserMedia 期间被取消
+      try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+      chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
+      return;
+    }
+    state = "recording";
+    beginRecording();
+  }
+
+  // 预约式启动：点开始只做计划（取流推迟到倒计时归零，弹窗全程稳定）
+  function schedule(msg) {
+    settings = msg.settings || {};
+    payload = msg.payload || {};
+    pendingSettings = settings;
+    pendingPayload = payload;
+    pendingTabId = msg.tabId;
+
+    mime = pickMime(settings.format === "webm" ? "webm" : "mp4");
+    ext = mime.startsWith("video/mp4") ? "mp4" : "webm";
+
     chunks = [];
     bytes = 0;
     currentLesson = "";
     currentLessonSrc = "";
+    captureRequested = false;
+    startError = "";
     activeBase = 0;
     state = "countdown";
     startLoops();
@@ -147,12 +197,12 @@
     if (delaySec > 0) {
       countEndTs = now() + delaySec * 1000;
       countdownTimer = setInterval(() => {
-        if (state === "countdown" && now() >= countEndTs) beginRecording();
+        if (state === "countdown" && now() >= countEndTs) requestCapture();
       }, 200);
     } else {
-      beginRecording();
+      requestCapture();
     }
-    return { ok: true, mime };
+    return { ok: true, mime, delay: delaySec };
   }
 
   function pause() {
@@ -176,6 +226,14 @@
   function stopAll(reason) {
     if (state === "stopping" || state === "idle") return { ok: true };
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    if (state === "countdown" && !captureStarted) {
+      // 预约期取消：尚未取流，干净退出、无任何文件
+      state = "idle";
+      stopLoops();
+      updateBadge();
+      chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
+      return { ok: true };
+    }
     state = "stopping";
     finishDeadline = now() + 300000; // 大文件落定上限 5 分钟
     if (resumeTs !== null) { const t = now(); activeBase += t - resumeTs; resumeTs = null; }
@@ -231,6 +289,7 @@
       bytes,
       activeMs: activeBase + (resumeTs ? now() - resumeTs : 0),
       anchorName: anchorPending ? anchorName : "",
+      error: startError,
     };
   }
 

@@ -125,9 +125,15 @@ function render(st) {
     $("startBtn").disabled = false;
     $("startBtn").textContent = "开始录制当前标签页";
     if (st && st.last) {
-      $("lastResult").textContent = st.last.name
-        ? `上次：${st.last.name}（${fmtMB(st.last.bytes)}）`
-        : "";
+      if (st.last.error) {
+        $("lastResult").textContent = "启动失败：" + st.last.error + "（请在播放页重新点开始）";
+      } else if (st.last.cancelled) {
+        $("lastResult").textContent = "已取消，未录制任何内容。";
+      } else if (st.last.name) {
+        $("lastResult").textContent = `上次：${st.last.name}（${fmtMB(st.last.bytes)}）`;
+      } else {
+        $("lastResult").textContent = "";
+      }
     }
     return;
   }
