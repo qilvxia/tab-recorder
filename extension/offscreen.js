@@ -328,9 +328,13 @@
   // ---- 消息入口 ----
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     switch (msg && msg.type) {
-      case "offscreen-start":
-        start(msg).then((r) => sendResponse(r)).catch((e) => sendResponse({ ok: false, error: String(e && e.message || e) }));
-        return true;
+      case "offscreen-schedule":
+        try {
+          sendResponse(schedule(msg));
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+        break;
       case "offscreen-stop": sendResponse(stopAll("manual")); break;
       case "offscreen-pause": sendResponse(pause()); break;
       case "offscreen-resume": sendResponse(resume()); break;
