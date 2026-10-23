@@ -1,10 +1,10 @@
 {
   "manifest_version": 3,
-  "name": "标签页录制器 · 自动分节",
+  "name": "标签页录制器",
   "short_name": "标签页录制器",
-  "version": "1.1.11",
+  "version": "2.0.0",
   "minimum_chrome_version": "116",
-  "description": "录制当前标签页的画面与声音（不混入其他应用声音）。支持整门课程连播时自动按课时分节保存、自动命名归档，可后台持续录制、定时自动停止。",
+  "description": "录制当前标签页的画面与声音，后台持续录制，自动以播放标题命名，文件保存在浏览器下载目录。",
   "action": {
     "default_popup": "popup.html",
     "default_title": "标签页录制器",
@@ -22,7 +22,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "options_page": "options.html",
   "commands": {
     "_execute_action": {
       "suggested_key": {

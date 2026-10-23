@@ -33,26 +33,11 @@ header b { flex: 1; font-size: 13px; }
 section { padding: 12px; }
 .row { margin: 10px 0; }
 .row label { display: block; font-size: 12px; color: var(--sub); margin-bottom: 4px; }
-input[type="text"], input[type="number"] {
+input[type="number"] {
   width: 100%; padding: 6px 8px; font: inherit; color: var(--ink);
   border: 1px solid var(--line); border-radius: 8px; background: var(--card);
 }
-input[type="text"]:focus, input[type="number"]:focus { outline: 2px solid #bcd3ff; border-color: var(--brand); }
-
-.modeRow { display: flex; gap: 8px; }
-.modeBtn {
-  flex: 1; padding: 8px 0; font: inherit; cursor: pointer;
-  border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--sub);
-}
-.modeBtn.active { border-color: var(--brand); color: var(--brand); background: #eef4ff; font-weight: 600; }
-
-.chips { display: flex; gap: 6px; flex-wrap: wrap; }
-.chipBtn {
-  padding: 3px 10px; font-size: 12px; cursor: pointer;
-  border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--sub);
-}
-.chipBtn.active { border-color: var(--brand); color: #fff; background: var(--brand); }
-.cropLabel { font-size: 12px; color: var(--sub); align-self: center; padding: 0 2px; max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+input:focus { outline: 2px solid #bcd3ff; border-color: var(--brand); }
 
 .hint { font-size: 12px; color: var(--sub); margin: 4px 0 8px; }
 button.primary {
@@ -66,7 +51,6 @@ button.danger {
 }
 .tip { margin-top: 10px; font-size: 11.5px; color: var(--sub); }
 .tip.small { margin-top: 8px; }
-.tip a, footer a { color: var(--brand); text-decoration: none; }
 
 .statMain { background: var(--card); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; }
 .lesson { font-size: 14px; font-weight: 600; word-break: break-all; }
@@ -90,4 +74,3 @@ footer {
   border-top: 1px solid var(--line); font-size: 12px; background: var(--card);
 }
 .hidden { display: none !important; }
-.err { color: var(--rec); font-size: 11.5px; margin-top: 6px; }
