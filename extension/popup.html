@@ -14,6 +14,16 @@
 
   <!-- 待机：开始录制 -->
   <section id="idleBox">
+    <div class="modeRow">
+      <button class="modeBtn active" id="modeSingle" title="录制为一个完整文件">单段录制</button>
+      <button class="modeBtn" id="modeSegment" title="连播课程自动按课时分节保存">自动分节（连播课程）</button>
+    </div>
+
+    <div id="courseRow" class="row hidden">
+      <label>课程名（用于文件名前缀）</label>
+      <input id="courseFolder" type="text" placeholder="如：2025JS逆向；留空 = 不加前缀">
+    </div>
+
     <div class="row">
       <label>延时开始（秒，0 = 立即开始）</label>
       <input id="startDelay" type="number" min="0" max="60" step="1" value="0">
@@ -27,12 +37,14 @@
   <section id="recBox" class="hidden">
     <div class="statMain">
       <div class="lesson" id="curLesson">…</div>
-      <div class="meta"><span id="segTime"></span></div>
+      <div class="meta"><span id="curSeq"></span></div>
     </div>
     <div class="tip small" id="detTitle"></div>
     <div class="grid">
+      <div><i>已保存</i><b id="segCount">0 节</b></div>
+      <div><i>总时长</i><b id="totalTime">00:00</b></div>
       <div><i>已录大小</i><b id="totalSize">0 MB</b></div>
-      <div><i>录制时长</i><b id="totalTime">00:00</b></div>
+      <div><i>本节时长</i><b id="segTime">00:00</b></div>
     </div>
     <div class="btnRow">
       <button id="pauseBtn">暂停</button>

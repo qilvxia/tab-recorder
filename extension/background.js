@@ -186,6 +186,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // 异步 sendResponse
 });
 
+// URL 变化（SPA 切课时路由会变）→ 分节信号（M2）
+chrome.tabs.onUpdated.addListener(async (tabId, change) => {
+  const st = await getSession();
+  if (st.recording && tabId === st.tabId && change.url) {
+    chrome.runtime.sendMessage({ type: "offscreen-url", url: change.url }).catch(() => {});
+  }
+});
+
 // 标签页关闭 → 结束录制（offscreen 会妥善保存已录内容）
 chrome.tabs.onRemoved.addListener(async (tabId) => {
   const st = await getSession();

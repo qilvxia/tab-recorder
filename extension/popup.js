@@ -18,6 +18,7 @@ const SRC_LABEL = {
 
 let tabInfo = null;
 let pollTimer = null;
+let uiMode = "single"; // single | segment
 
 function fmtDur(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -53,6 +54,16 @@ async function init() {
   const st = await chrome.runtime.sendMessage({ type: "status" }).catch(() => null);
   render(st && st.state !== "idle" ? st : null);
 
+  $("modeSingle").onclick = () => setMode("single");
+  $("modeSegment").onclick = () => setMode("segment");
+  setMode("single");
+
+  // 课程名默认预填站点域名，可改
+  try {
+    const host = new URL(tabInfo.url).hostname.replace(/^www\./, "");
+    $("courseFolder").value = host;
+  } catch (e) { $("courseFolder").value = ""; }
+
   $("startBtn").onclick = startRecording;
   $("stopBtn").onclick = async () => {
     $("stopBtn").disabled = true;
@@ -67,6 +78,13 @@ async function init() {
   };
 }
 
+function setMode(m) {
+  uiMode = m;
+  $("modeSingle").classList.toggle("active", m === "single");
+  $("modeSegment").classList.toggle("active", m === "segment");
+  $("courseRow").classList.toggle("hidden", m !== "segment");
+}
+
 async function startRecording() {
   if (!tabInfo || tabInfo.id == null) return;
   if (tabInfo.url && /^(chrome|edge|about|chrome-extension):/i.test(tabInfo.url)) {
@@ -75,6 +93,8 @@ async function startRecording() {
   }
   const settings = await loadSettings();
   const payload = {
+    mode: uiMode,
+    courseFolder: uiMode === "segment" ? $("courseFolder").value.trim() : "",
     startDelaySeconds: Math.min(60, Math.max(0, Number($("startDelay").value) || 0)),
     tabTitle: tabInfo.title,
     tabUrl: tabInfo.url,
@@ -129,8 +149,11 @@ function render(st) {
         $("lastResult").textContent = "启动失败：" + st.last.error + "（请在播放页重新点开始）";
       } else if (st.last.cancelled) {
         $("lastResult").textContent = "已取消，未录制任何内容。";
-      } else if (st.last.name) {
-        $("lastResult").textContent = `上次：${st.last.name}（${fmtMB(st.last.bytes)}）`;
+      } else if ((st.last.segments || []).length > 1) {
+        $("lastResult").textContent = `上次：${st.last.segments.length} 个文件`;
+      } else if ((st.last.segments || []).length === 1) {
+        const s = st.last.segments[0];
+        $("lastResult").textContent = `上次：${s.filename}（${fmtMB(s.bytes)}）`;
       } else {
         $("lastResult").textContent = "";
       }
@@ -151,17 +174,20 @@ function render(st) {
 
   if (st.state === "countdown") {
     $("curLesson").textContent = `${st.countdown || 0} 秒后开始录制…`;
-    $("segTime").textContent = "00:00";
+    $("curSeq").textContent = st.mode === "segment" ? "自动分节" : "";
     $("detTitle").textContent = "";
   } else {
     const les = st.lesson || {};
-    $("curLesson").textContent = les.name || "单段录制中";
-    $("segTime").textContent = fmtDur(st.activeMs || 0);
-    $("detTitle").textContent = les.name
+    $("curLesson").textContent = les.name || (st.mode === "segment" ? "正在识别课时名…" : "单段录制中");
+    $("curSeq").textContent = st.mode === "segment" ? `第 ${st.seq} 节` : "";
+    const les2 = les.name
       ? `识别标题（${SRC_LABEL[les.src] || les.src || "未知来源"}）：${les.name}`
-      : "识别标题：未识别到（将用「录制_时间」命名）";
+      : "识别标题：未识别到（该节将命名为「第N节」）";
+    $("detTitle").textContent = les2;
   }
-  $("totalTime").textContent = fmtDur(st.activeMs || 0);
+  $("segCount").textContent = (st.segCount || 0) + " 节";
+  $("segTime").textContent = fmtDur(st.segMs || 0);
+  $("totalTime").textContent = fmtDur(st.totalMs || 0);
   $("totalSize").textContent = fmtMB(st.bytes || 0);
 
   const tips = [];

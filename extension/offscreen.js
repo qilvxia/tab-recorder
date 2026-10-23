@@ -1,8 +1,9 @@
-// offscreen.js — 录制引擎：tabCapture 取流、音频回环、MediaRecorder、锚点直存
+// offscreen.js — 录制引擎：tabCapture 取流、音频回环、单段/自动分节、锚点直存
 // 生命周期独立于 popup 和 service worker（USER_MEDIA reason 无时限）。
 
 (() => {
   let state = "idle"; // idle | countdown | recording | paused | stopping
+  let mode = "single"; // single | segment
   let settings = {};
   let payload = {};
   let stream = null;
@@ -11,19 +12,33 @@
   let mime = "";
   let ext = "mp4";
 
-  let chunks = [];
-  let bytes = 0;
-  let activeBase = 0; // 录制计时（暂停不计入）
+  let chunks = []; // 当前段
+  let bytes = 0; // 当前段字节
+  let activeBaseSeg = 0; // 当前段计时（暂停不计入）
+  let activeBaseTotal = 0; // 总计时
   let resumeTs = null;
   const now = () => Date.now();
 
-  // 识别标题（content-detect 级联上报，单段命名用）
+  // 分节（segment 模式）：同一条流上换 recorder，零丢帧
+  let seq = 0;
+  let cur = null; // {seq, name, chunks, bytes}
+  let segmentsDone = []; // {seq, name, bytes, filename}
+  let courseFolder = "";
+  let lastUrl = "";
+  let silenceSince = null;
+  let silenceSplitFired = false;
+  let splitTimer = null;
+  let lastSplitAt = 0;
+  let pendingFinalize = 0; // 正在收尾（blob→锚点注册）的段数：防"未注册先判完成"
+  const SEG = { debounceMs: 1500, silenceSec: 5 }; // 分节参数（去抖 / 静默切节阈值）
+
+  // 识别标题（content-detect 级联上报）
   let currentLesson = "";
   let currentLessonSrc = "";
 
-  // 锚点保存对账
-  let anchorName = "";
-  let anchorPending = false;
+  // 锚点保存对账（多段并发落定）
+  let anchorName = ""; // 最近一段文件名（展示用）
+  const pendingAnchors = new Set();
   let finishDeadline = 0;
 
   // 捕获后移：倒计时期不取流（点开始瞬间几乎无动作，弹窗不会被顶掉），
@@ -87,7 +102,15 @@
     return "";
   }
 
-  function buildName() {
+  function buildSegName(seg) {
+    const prefix = sanitize(courseFolder, 40);
+    const lesson = sanitize(stripLessonPrefix(seg.name));
+    const base = lesson && !isJunkName(lesson) ? lesson : `第${seg.seq}节`;
+    const seq2 = String(seg.seq).padStart(2, "0");
+    return prefix ? `${prefix}_${seq2}-${base}` : `${seq2}-${base}`;
+  }
+
+  function buildSingleName() {
     const d = new Date();
     const p2 = (v) => String(v).padStart(2, "0");
     const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
@@ -96,6 +119,9 @@
     return `录制_${stamp}`;
   }
 
+  const segActiveMs = () => activeBaseSeg + (resumeTs ? now() - resumeTs : 0);
+  const totalActiveMs = () => activeBaseTotal + (resumeTs ? now() - resumeTs : 0);
+
   function makeRecorder() {
     const r = new MediaRecorder(stream, {
       mimeType: mime,
@@ -103,19 +129,29 @@
       audioBitsPerSecond: Number(settings.audioBitrate) || 128000,
     });
     r.ondataavailable = (e) => {
-      if (e.data && e.data.size) {
-        chunks.push(e.data);
+      if (e.data && e.data.size && cur) {
+        cur.chunks.push(e.data);
+        cur.bytes += e.data.size;
         bytes += e.data.size;
       }
     };
     return r;
   }
 
+  function startSegment() {
+    seq += 1;
+    cur = { seq, name: currentLesson || "", chunks: [], bytes: 0 };
+    activeBaseSeg = 0;
+    if (resumeTs === null) resumeTs = now();
+    recorder = makeRecorder();
+    recorder.start(1000);
+  }
+
   function beginRecording() {
     if (state !== "recording") return;
     resumeTs = now();
-    recorder = makeRecorder();
-    recorder.start(1000);
+    state = "recording";
+    startSegment();
   }
 
   // 倒计时归零 → 向 SW 要 streamId → 真正开始捕获与录制
@@ -180,17 +216,26 @@
     pendingSettings = settings;
     pendingPayload = payload;
     pendingTabId = msg.tabId;
+    mode = payload.mode === "segment" ? "segment" : "single";
+    courseFolder = sanitize(payload.courseFolder || "", 40);
 
     mime = pickMime(settings.format === "webm" ? "webm" : "mp4");
     ext = mime.startsWith("video/mp4") ? "mp4" : "webm";
 
+    seq = 0;
+    cur = null;
+    segmentsDone = [];
     chunks = [];
     bytes = 0;
     currentLesson = "";
     currentLessonSrc = "";
+    lastUrl = payload.tabUrl || "";
+    silenceSince = null;
+    silenceSplitFired = false;
     captureRequested = false;
     startError = "";
-    activeBase = 0;
+    activeBaseSeg = 0;
+    activeBaseTotal = 0;
     state = "countdown";
     startLoops();
     const delaySec = Math.min(60, Math.max(0, Number(payload.startDelaySeconds) || 0));
@@ -208,7 +253,8 @@
   function pause() {
     if (state !== "recording") return { ok: false };
     const t = now();
-    activeBase += t - resumeTs;
+    activeBaseSeg += t - resumeTs;
+    activeBaseTotal += t - resumeTs;
     resumeTs = null;
     state = "paused";
     try { recorder && recorder.state !== "inactive" && recorder.pause(); } catch (e) {}
@@ -226,7 +272,7 @@
   function stopAll(reason) {
     if (state === "stopping" || state === "idle") return { ok: true };
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
-    if (state === "countdown" && !captureStarted) {
+    if (state === "countdown" && !captureRequested) {
       // 预约期取消：尚未取流，干净退出、无任何文件
       state = "idle";
       stopLoops();
@@ -235,45 +281,55 @@
       return { ok: true };
     }
     state = "stopping";
-    finishDeadline = now() + 300000; // 大文件落定上限 5 分钟
-    if (resumeTs !== null) { const t = now(); activeBase += t - resumeTs; resumeTs = null; }
+    if (splitTimer) { clearTimeout(splitTimer); splitTimer = null; }
+    const deadline = now() + 300000; // 大文件落定上限 5 分钟
+    if (resumeTs !== null) { const t = now(); activeBaseSeg += t - resumeTs; activeBaseTotal += t - resumeTs; resumeTs = null; }
     if (recorder && recorder.state !== "inactive") {
-      recorder.onstop = () => finalize().then(maybeFinish);
+      recorder.onstop = () => finalizeSegment(cur).then(maybeFinish);
       try { recorder.stop(); } catch (e) { maybeFinish(); }
     } else {
       maybeFinish();
     }
+    finishDeadline = deadline;
     return { ok: true };
   }
 
   // 锚点直存：File（带名字）+ <a download>——用户 Chrome 实测唯一 100% 正确命名的通道
-  async function finalize() {
-    if (!chunks.length) return;
-    const blob = new Blob(chunks, { type: mime });
-    chunks = [];
-    anchorName = `${buildName()}.${ext}`;
-    const url = URL.createObjectURL(new File([blob], anchorName, { type: mime }));
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = anchorName;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    anchorPending = true;
-    chrome.runtime.sendMessage({ type: "track-anchor", name: anchorName }).catch(() => {});
-    return;
+  async function finalizeSegment(seg) {
+    if (!seg || !seg.chunks.length) return;
+    pendingFinalize += 1; // 同步段先计数：maybeFinish 不会在锚点注册前抢跑
+    try {
+      const blob = new Blob(seg.chunks, { type: mime });
+      seg.chunks = [];
+      const name = `${buildSegName(seg)}.${ext}`;
+      const url = URL.createObjectURL(new File([blob], name, { type: mime }));
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      pendingAnchors.add(name);
+      anchorName = name;
+      chrome.runtime.sendMessage({ type: "track-anchor", name }).catch(() => {});
+      segmentsDone.push({ seq: seg.seq, name: seg.name, bytes: blob.size, filename: name });
+    } finally {
+      pendingFinalize -= 1;
+    }
   }
 
   function maybeFinish() {
     if (state !== "stopping") return;
-    if (anchorPending && now() <= finishDeadline) return;
-    state = "idle";
-    stopLoops();
-    destroyExtra();
-    chrome.runtime.sendMessage({
-      type: "recording-finished",
-      summary: { name: anchorName, bytes, saveErrors: [] },
-    }).catch(() => {});
+    if (pendingFinalize > 0) return; // 还有段的收尾没走完，等它把锚点注册进来
+    if (pendingAnchors.size === 0 || now() > finishDeadline) {
+      state = "idle";
+      stopLoops();
+      destroyExtra();
+      chrome.runtime.sendMessage({
+        type: "recording-finished",
+        summary: { mode, segments: segmentsDone, last: anchorName },
+      }).catch(() => {});
+    }
   }
 
   function destroyExtra() {
@@ -283,14 +339,41 @@
 
   function status() {
     return {
-      state, mime, ext,
+      state, mode, mime, ext,
       countdown: state === "countdown" ? Math.max(0, Math.ceil((countEndTs - now()) / 1000)) : 0,
       lesson: { name: currentLesson, src: currentLessonSrc },
+      seq: cur ? cur.seq : 0,
+      segMs: segActiveMs(),
+      totalMs: totalActiveMs(),
       bytes,
-      activeMs: activeBase + (resumeTs ? now() - resumeTs : 0),
-      anchorName: anchorPending ? anchorName : "",
+      segCount: segmentsDone.length,
       error: startError,
     };
+  }
+
+  // ---- 分节信号 ----
+  function requestSplit(reason) {
+    if (state !== "recording" || mode !== "segment") return;
+    if (now() - lastSplitAt < SEG.debounceMs || splitTimer) return;
+    console.info("[rec] split signal:", reason);
+    splitTimer = setTimeout(() => {
+      splitTimer = null;
+      doSplit();
+    }, SEG.debounceMs);
+  }
+
+  function doSplit() {
+    if (state !== "recording" || mode !== "segment") return;
+    lastSplitAt = now();
+    const old = recorder;
+    const seg = cur;
+    recorder = null;
+    if (!old || old.state === "inactive") { startSegment(); return; }
+    old.onstop = () => {
+      finalizeSegment(seg).then(maybeFinish); // 停止恰发生在切段收尾期间时，也要补完成判定
+      if (state === "recording" || state === "paused") startSegment();
+    };
+    try { old.stop(); } catch (e) { console.warn(e); startSegment(); }
   }
 
   // ---- 信号处理 ----
@@ -299,8 +382,35 @@
     if (data.lesson) {
       const name = stripLessonPrefix(data.lesson);
       if (name && name !== currentLesson) {
+        const isFirst = !currentLesson;
         currentLesson = name;
         currentLessonSrc = String(data.lessonSrc || "");
+        if (state === "recording" && mode === "segment") {
+          if (cur && !cur.name) cur.name = name; // 段名为空随时可补写——晚到的标题也能命名本段
+          if (!isFirst) requestSplit("lesson-change");
+        }
+      }
+    }
+    if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);
+    if (data.url && data.url !== lastUrl) {
+      const isFirstUrl = !lastUrl;
+      lastUrl = data.url;
+      if (!isFirstUrl && state === "recording" && mode === "segment") requestSplit("url-change");
+    }
+    if (data.ended && state === "recording" && mode === "segment") {
+      requestSplit("video-ended");
+    }
+  }
+
+  function onAudible(audible) {
+    if (audible) {
+      silenceSince = null;
+      silenceSplitFired = false;
+    } else if (state === "recording" && mode === "segment") {
+      if (silenceSince === null) silenceSince = now();
+      if (!silenceSplitFired && now() - silenceSince >= SEG.silenceSec * 1000) {
+        silenceSplitFired = true;
+        requestSplit("silence-gap");
       }
     }
   }
@@ -340,9 +450,18 @@
       case "offscreen-resume": sendResponse(resume()); break;
       case "offscreen-status": sendResponse(status()); break;
       case "offscreen-content": onContent(msg.data); sendResponse({ ok: true }); break;
+      case "offscreen-url":
+        if (msg.url && msg.url !== lastUrl) {
+          const isFirstUrl = !lastUrl;
+          lastUrl = msg.url;
+          if (!isFirstUrl && state === "recording" && mode === "segment") requestSplit("url-change(sw)");
+        }
+        sendResponse({ ok: true });
+        break;
+      case "offscreen-audible": onAudible(!!msg.audible); sendResponse({ ok: true }); break;
       case "offscreen-tab-closed": sendResponse(stopAll("tab-closed")); break;
       case "anchor-landed": {
-        anchorPending = false;
+        pendingAnchors.delete(msg.name);
         if (!msg.ok) console.warn("anchor save interrupted:", msg.name, msg.error || "");
         if (state === "stopping") maybeFinish();
         sendResponse({ ok: true });

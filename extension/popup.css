@@ -39,6 +39,13 @@ input[type="number"] {
 }
 input:focus { outline: 2px solid #bcd3ff; border-color: var(--brand); }
 
+.modeRow { display: flex; gap: 8px; }
+.modeBtn {
+  flex: 1; padding: 8px 0; font: inherit; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 10px; background: var(--card); color: var(--sub);
+}
+.modeBtn.active { border-color: var(--brand); color: var(--brand); background: #eef4ff; font-weight: 600; }
+
 .hint { font-size: 12px; color: var(--sub); margin: 4px 0 8px; }
 button.primary {
   width: 100%; padding: 10px 0; font: inherit; font-weight: 600; cursor: pointer;
