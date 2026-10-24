@@ -27,15 +27,21 @@
     return NEXT_WORDS.some((w) => s.includes(w));
   }
 
-  // <a> 点击策略：http(s) 链接强制同页跳转（无论 target，防 _blank 开新页断录制）；
-  // javascript: 伪协议 / 空链接 / 非 a 元素一律 el.click()（冒泡给委托容器）
+  // 激活元素：http(s) 链接同页跳转（防 _blank 开新页断录制）；其余派发完整鼠标
+  // 事件序列 pointerdown→mousedown→mouseup→click（覆盖 click 型、mousedown 型、
+  // pointerdown 型监听；事件冒泡给委托容器）。通用扩展需覆盖多种站点事件风格。
   function activateEl(el) {
     if (el.tagName === "A" && el.href && /^https?:/i.test(el.href)) {
       location.href = el.href;
-      return true;
+      return;
     }
-    el.click();
-    return false;
+    const rect = el.getBoundingClientRect();
+    const base = { bubbles: true, cancelable: true, view: window,
+      clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2 };
+    for (const type of ["pointerdown", "mousedown", "mouseup", "click"]) {
+      const Ev = type === "pointerdown" && window.PointerEvent ? PointerEvent : MouseEvent;
+      try { el.dispatchEvent(new Ev(type, base)); } catch (e) { /* 单事件失败继续 */ }
+    }
   }
 
   // 收集 root（含各级 shadowRoot）下全部元素——播放器 web components 的
@@ -65,7 +71,24 @@
     return "";
   }
 
-  // 策略②：课程列表中当前高亮项的下一项
+  // 策略②：弹窗交互元素 class 启发式——关闭/跳过按钮的通用 class 命名
+  // （有的站点点关闭后自动播下一节，有的 class 即"进入下一节"）
+  const CLASS_NEXT_SEL = "[class*='next' i],[class*='skip' i],[class*='close' i],[class*='continue' i]";
+
+  function clickClassHint() {
+    let els = [];
+    try { els = document.querySelectorAll(CLASS_NEXT_SEL); } catch (e) { return ""; }
+    for (const el of els) {
+      if (!visible(el)) continue;
+      const t = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+      if (t.length > 60) continue;
+      activateEl(el);
+      return `class 启发式「${el.className.toString().slice(0, 30)}」`;
+    }
+    return "";
+  }
+
+  // 策略③：课程列表中当前高亮项的下一项
   function clickListNext() {
     let active = null;
     try {
@@ -103,7 +126,7 @@
     for (const v of document.querySelectorAll("video")) {
       if (!v.paused && !v.ended) return; // 本帧已有视频在播，无需连播
     }
-    const how = clickTextNext() || clickListNext();
+    const how = clickTextNext() || clickClassHint() || clickListNext();
     if (how) {
       advTimers.forEach(clearTimeout);
       advTimers = [];

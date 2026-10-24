@@ -50,6 +50,8 @@
   let pendingLessonAt = 0;
   let lastSilenceSplitAt = 0;
   let lastSplitWasIdle = false; // 上次切段是否播完/静默类（此后首个 URL 稳定切段的黑屏小段应丢弃）
+  let segStartAt = 0; // 当前段开始时刻（lesson-change 的 URL 联动确认基准）
+  let lastSplitInfo = null; // {reason, at}——切节原因（面板临时显示，诊断用）
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -161,6 +163,7 @@
     seq += 1;
     cur = { seq, name: currentLesson || "", chunks: [], bytes: 0 };
     activeBaseSeg = 0;
+    segStartAt = now(); // lesson-change 的 URL 联动确认基准：本段开始后 URL 变过才算真换课
     if (resumeTs === null) resumeTs = now();
     recorder = makeRecorder();
     recorder.start(1000);
@@ -256,6 +259,8 @@
     pendingLessonAt = 0;
     lastSilenceSplitAt = 0;
     lastSplitWasIdle = false;
+    segStartAt = 0;
+    lastSplitInfo = null;
     silenceSince = null;
     silenceSplitFired = false;
     captureRequested = false;
@@ -373,6 +378,7 @@
       totalMs: totalActiveMs(),
       bytes,
       segCount: segmentsDone.length,
+      lastSplit: lastSplitInfo,
       error: startError,
     };
   }
@@ -402,6 +408,10 @@
     }
     lastSplitAt = now();
     lastSplitWasIdle = reason === "silence-gap" || reason === "video-ended";
+    // 切段后识别状态重置：mediasession 等高优源的残留值不再挡住下一节识别
+    //（下一节的首个识别值从任意源接受，随后来源升级继续收敛）
+    currentLessonSrc = "";
+    lastSplitInfo = { reason, at: now() };
     // 播完/静默类切段 = 页面正停在「等待人工点下一节」的状态 → 触发自动连播。
     // url-change 切段说明页面已自行跳转，再点会跳过一节，不广播。
     // 不依赖 video ended 事件：加密播放器（保利威类）不一定触发它。
@@ -431,9 +441,9 @@
   function checkPendingSplits() {
     if (state !== "recording" || mode !== "segment") { pendingUrl = ""; pendingLesson = ""; return; }
     if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
-      // 前置：课时名未识别时 URL 变化一律不切段（切了也无法正确命名；识别到位后段名自然补写）。
+      // 前置：课时名/段名未识别时 URL 变化一律不切段（切了也无法正确命名；识别到位后段名自然补写）。
       // 开录后点播放常使播放器给 URL 加参数——这条前置拦住由此产生的开录碎片段
-      if (!currentLesson) {
+      if (!currentLesson || !cur || !cur.name) {
         pendingUrl = "";
         return;
       }
@@ -458,8 +468,11 @@
     }
     if (pendingLesson && now() - pendingLessonAt >= SEG.lessonStableMs) {
       const p = pendingLesson;
-      // 稳定后仍是新值（未被抖回/再变）才切；与本段同名说明只是同课重复上报
-      if (p === currentLesson && !(cur && cur.name === p && cur.bytes > 0)) {
+      // 稳定后仍是新值（未被抖回/再变）才切；与本段同名说明只是同课重复上报。
+      // URL 联动确认：真换课 = 课时名与本段开始后的 URL 都变过；纯名字变化
+      //（开录识别收敛、弹窗期抖动）不切。
+      const urlChangedSinceSeg = segStartAt > 0 && lastUrlChangeAt > segStartAt;
+      if (p === currentLesson && !(cur && cur.name === p && cur.bytes > 0) && urlChangedSinceSeg) {
         if (requestSplit("lesson-change")) pendingLesson = "";
       } else {
         pendingLesson = "";
