@@ -146,10 +146,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case "content-report": {
         if (await hasOffscreen()) chrome.runtime.sendMessage({ type: "offscreen-content", data: msg.data }).catch(() => {});
-        // 播完事件广播给该标签页所有帧：ended 可能在 iframe 的视频上，而「下一节」
-        // 入口在顶层文档——需要每个帧各自找入口点击（连播）
-        if (msg.data && msg.data.ended && sender.tab && sender.tab.id != null) {
-          chrome.tabs.sendMessage(sender.tab.id, { type: "try-advance" }).catch(() => {});
+        // 播完事件广播给录制标签页所有帧：ended 可能在 iframe 的视频上，而「下一节」
+        // 入口在顶层文档——需要每个帧各自找入口点击（连播）。
+        // 广播目标优先 sender.tab，无则用会话中记录的录制标签页（同时使链路可独立驱动）
+        if (msg.data && msg.data.ended) {
+          const st = await getSession();
+          const tabId = (sender.tab && sender.tab.id) != null ? sender.tab.id : st.tabId;
+          if (tabId != null) chrome.tabs.sendMessage(tabId, { type: "try-advance" }).catch(() => {});
         }
         sendResponse({ ok: true });
         break;

@@ -38,11 +38,22 @@
     return false;
   }
 
-  // 策略①：扫描全部可见元素的叶子文本（覆盖事件委托场景——入口常是
-  // 无自身 handler 的 div/span，点击冒泡给委托容器）
-  function clickTextNext() {
+  // 收集 root（含各级 shadowRoot）下全部元素——播放器 web components 的
+  // 弹窗按钮常藏在 shadow DOM 里，querySelectorAll 穿不透
+  function collectAllElements(root, out) {
     let els = [];
-    try { els = document.querySelectorAll("body *"); } catch (e) { return ""; }
+    try { els = root.querySelectorAll("*"); } catch (e) { return; }
+    for (const el of els) {
+      out.push(el);
+      if (el.shadowRoot) collectAllElements(el.shadowRoot, out);
+    }
+  }
+
+  // 策略①：扫描全部可见元素的叶子文本（覆盖事件委托场景——入口常是
+  // 无自身 handler 的 div/span，点击冒泡给委托容器；含 shadow DOM）
+  function clickTextNext() {
+    const els = [];
+    collectAllElements(document, els);
     for (const el of els) {
       if (el.firstElementChild) continue; // 叶子节点：避免拿到整块容器文本
       if (!visible(el)) continue;
@@ -108,7 +119,9 @@
       return;
     }
     advTimers.forEach(clearTimeout);
-    advTimers = [setTimeout(attemptAdvance, 2000), setTimeout(attemptAdvance, 5000), setTimeout(attemptAdvance, 8000)];
+    // 九轮尝试：覆盖弹窗延迟出现、入场动画期间不可见等情况；点击成功即停
+    advTimers = [2000, 4000, 6000, 8000, 12000, 16000, 20000, 25000, 30000].map((ms) =>
+      setTimeout(attemptAdvance, ms));
   }
   function cancelAdvance() {
     advTimers.forEach(clearTimeout);
