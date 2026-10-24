@@ -2,3 +2,4 @@
 .cft/
 .diag-tmp/
 *.log
+.diag-profile/
