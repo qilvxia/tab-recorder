@@ -431,6 +431,12 @@
   function checkPendingSplits() {
     if (state !== "recording" || mode !== "segment") { pendingUrl = ""; pendingLesson = ""; return; }
     if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
+      // 前置：课时名未识别时 URL 变化一律不切段（切了也无法正确命名；识别到位后段名自然补写）。
+      // 开录后点播放常使播放器给 URL 加参数——这条前置拦住由此产生的开录碎片段
+      if (!currentLesson) {
+        pendingUrl = "";
+        return;
+      }
       // 第二道闸：换课必换标题——课时名与当前段相同且本段已有数据，视为同课误报
       if (cur && cur.name && cur.name === currentLesson && cur.bytes > 0) {
         console.info("[rec] url 稳定但课时名未变，不切节");

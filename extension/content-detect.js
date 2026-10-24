@@ -27,8 +27,19 @@
     return NEXT_WORDS.some((w) => s.includes(w));
   }
 
+  // <a> 点击策略：http(s) 链接强制同页跳转（无论 target，防 _blank 开新页断录制）；
+  // javascript: 伪协议 / 空链接 / 非 a 元素一律 el.click()（冒泡给委托容器）
+  function activateEl(el) {
+    if (el.tagName === "A" && el.href && /^https?:/i.test(el.href)) {
+      location.href = el.href;
+      return true;
+    }
+    el.click();
+    return false;
+  }
+
   // 策略①：扫描全部可见元素的叶子文本（覆盖事件委托场景——入口常是
-  // 无自身 handler 的 div/span，点击冒泡给委托容器）；<a> 同页跳转保录制
+  // 无自身 handler 的 div/span，点击冒泡给委托容器）
   function clickTextNext() {
     let els = [];
     try { els = document.querySelectorAll("body *"); } catch (e) { return ""; }
@@ -37,11 +48,7 @@
       if (!visible(el)) continue;
       const t = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
       if (!okAdvText(t)) continue;
-      if (el.tagName === "A" && el.href && !el.target) {
-        location.href = el.href;
-      } else {
-        el.click();
-      }
+      activateEl(el);
       return `文本「${t.slice(0, 20)}」`;
     }
     return "";
@@ -71,11 +78,7 @@
     if (!nextEl) return "";
     const target = nextEl.querySelector("a") || nextEl;
     if (!visible(target)) return "";
-    if (target.tagName === "A" && target.href && !target.target) {
-      location.href = target.href;
-    } else {
-      target.click();
-    }
+    activateEl(target);
     return "列表下一项";
   }
 
