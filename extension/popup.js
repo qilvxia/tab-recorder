@@ -170,18 +170,31 @@ function render(st) {
 
   const chip = $("stateChip");
   if (st.state === "countdown") { chip.className = "chip paused"; chip.textContent = `延时中 ${st.countdown || 0}s`; }
+  else if (st.state === "between") { chip.className = "chip paused"; chip.textContent = "等待下一节"; }
   else if (st.state === "paused") { chip.className = "chip paused"; chip.textContent = "已暂停"; }
   else if (st.state === "stopping") { chip.className = "chip saving"; chip.textContent = "保存中"; }
   else { chip.className = "chip rec"; chip.textContent = "录制中"; }
 
   $("pauseBtn").textContent = st.state === "paused" ? "继续" : "暂停";
-  $("pauseBtn").disabled = st.state === "stopping" || st.state === "countdown";
+  $("pauseBtn").disabled = st.state === "stopping" || st.state === "countdown" || st.state === "between";
   $("stopBtn").disabled = st.state === "stopping";
 
   if (st.state === "countdown") {
     $("curLesson").textContent = `${st.countdown || 0} 秒后开始录制…`;
     $("curSeq").textContent = st.mode === "segment" ? "自动分节" : "";
     $("detTitle").textContent = "";
+  } else if (st.state === "between") {
+    const les = st.lesson || {};
+    $("curLesson").textContent = `已保存第 ${st.seq} 节，等待下一节开始…`;
+    $("curSeq").textContent = st.mode === "segment" ? "自动分节" : "";
+    $("detTitle").textContent = les.name ? `识别标题：${les.name}` : "";
+    $("segCount").textContent = (st.segCount || 0) + " 节";
+    $("totalTime").textContent = fmtDur(st.totalMs || 0);
+    $("totalSize").textContent = fmtMB(st.bytes || 0);
+    const tips2 = [];
+    if (st.error) tips2.push("节间恢复失败：" + st.error);
+    $("recTip").textContent = tips2.join(" ");
+    return;
   } else {
     const les = st.lesson || {};
     $("curLesson").textContent = les.name || (st.mode === "segment" ? "正在识别课时名…" : "单段录制中");

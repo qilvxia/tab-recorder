@@ -2,7 +2,7 @@
 // 生命周期独立于 popup 和 service worker（USER_MEDIA reason 无时限）。
 
 (() => {
-  let state = "idle"; // idle | countdown | recording | paused | stopping
+  let state = "idle"; // idle | countdown | recording | between | paused | stopping
   let mode = "single"; // single | segment
   let settings = {};
   let payload = {};
@@ -67,6 +67,7 @@
 
   // 捕获后移：倒计时期不取流（点开始瞬间几乎无动作，弹窗不会被顶掉），
   // 归零时才向 SW 要 streamId 开始捕获
+  let pauseAfterStop = false; // 停止后进入 between（节间等待）而非完全结束
   let pendingSettings = null;
   let pendingPayload = null;
   let pendingTabId = null;
@@ -80,6 +81,7 @@
   function updateBadge() {
     let text = "";
     if (state === "countdown") text = String(Math.max(0, Math.ceil((countEndTs - now()) / 1000)));
+    else if (state === "between") text = "‖";
     else if (state === "recording") text = "REC";
     else if (state === "paused") text = "II";
     else if (state === "stopping") text = "···";
@@ -180,6 +182,17 @@
   }
 
   // 倒计时归零 → 向 SW 要 streamId → 真正开始捕获与录制
+  // 节间等待 → 播放恢复/跳转成功 → 同流开新 recorder 续录（零丢帧，无二次捕获风险）
+  function resumeCapture() {
+    if (state !== "between") return;
+    console.info("[rec] 节间恢复：续录");
+    state = "recording";
+    currentLesson = ""; // 重置：等新节识别补写段名（between 期 detector 可能已上报新节名）
+    resumeTs = now();
+    startSegment();
+    updateBadge();
+  }
+
   async function requestCapture() {
     if (state !== "countdown" || captureRequested) return;
     captureRequested = true;
@@ -309,9 +322,17 @@
     return { ok: true };
   }
 
-  function stopAll(reason) {
+  function stopAll(reason, keepOffscreen) {
     if (state === "stopping" || state === "idle") return { ok: true };
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
+    if (state === "between") {
+      // 节间等待中手动停止：无未保存内容，干净结束整场
+      state = "idle";
+      stopLoops();
+      updateBadge();
+      chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
+      return { ok: true };
+    }
     if (state === "countdown" && !captureRequested) {
       // 预约期取消：尚未取流，干净退出、无任何文件
       state = "idle";
@@ -320,6 +341,7 @@
       chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
       return { ok: true };
     }
+    pauseAfterStop = !!keepOffscreen;
     state = "stopping";
     if (splitTimer) { clearTimeout(splitTimer); splitTimer = null; }
     const deadline = now() + 300000; // 大文件落定上限 5 分钟
@@ -361,6 +383,17 @@
   function maybeFinish() {
     if (state !== "stopping") return;
     if (pendingFinalize > 0) return; // 还有段的收尾没走完，等它把锚点注册进来
+    if (pendingAnchors.size !== 0 && now() <= finishDeadline) return;
+    if (pauseAfterStop) {
+      // 节间等待：当前节已保存，recorder 已停（不产数据=不录废段），tabCapture 流
+      // 与音频回环保留——恢复时直接在同流上开新 recorder（零丢帧，无二次捕获风险）
+      pauseAfterStop = false;
+      state = "between";
+      hasPlayed = false; // 恢复后重新从 playing 上报收敛
+      lastAdvanceBroadcast = now();
+      updateBadge();
+      return;
+    }
     if (pendingAnchors.size === 0 || now() > finishDeadline) {
       state = "idle";
       stopLoops();
@@ -458,6 +491,14 @@
 
   // tick 周期检查：URL/课时名挂起变化的稳定期判定（被全局闸拒绝时保留挂起，下轮重试）
   function checkPendingSplits() {
+    if (state === "between") {
+      // 节间等待：跳转成功（URL 稳定）→ 重新捕获续录（seq 与识别延续）
+      if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
+        pendingUrl = "";
+        resumeCapture();
+      }
+      return;
+    }
     if (state !== "recording" || mode !== "segment") { pendingUrl = ""; pendingLesson = ""; return; }
     if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
       // 前置：课时名/段名未识别时 URL 变化一律不切段（切了也无法正确命名；识别到位后段名自然补写）。
@@ -537,9 +578,13 @@
       lastPlayingTs = now();
       hasPlayed = true;
       silenceSplitFired = false;
+      if (state === "between") resumeCapture(); // 播放恢复：立即续录（不等 URL 稳定）
     }
     if (data.ended && state === "recording" && mode === "segment") {
-      requestSplit("video-ended"); // 播完是强信号，不受稳定期约束
+      // 播完：autoNext 开 → 停止录制并进入节间等待（弹窗期不录废段，跳转成功自动续录）；
+      // 关 → 维持切段行为（分段继续录）
+      if (settings.autoNext !== false) stopAll("advance-pause", true);
+      else requestSplit("video-ended");
     }
   }
 
@@ -572,10 +617,10 @@
     if (!(lastPlayingTs > segStartAt)) return; // 本段开始后未观察到过播放（重注入延迟期不启用）
     if (now() - lastPlayingTs < SEG.silenceSec * 1000) return;
     if (silenceSplitFired || now() - lastSilenceSplitAt < SEG.silenceGapMs) return;
-    if (requestSplit("silence-gap")) {
-      silenceSplitFired = true;
-      lastSilenceSplitAt = now();
-    }
+    silenceSplitFired = true;
+    lastSilenceSplitAt = now();
+    // 停播 5 秒确认 → 结束当前节并进入节间等待（弹窗期不录制，跳转成功自动续录）
+    stopAll("advance-pause", true);
   }
 
   function tick() {
