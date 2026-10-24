@@ -426,6 +426,9 @@
     // 切段后识别状态重置：mediasession 等高优源的残留值不再挡住下一节识别
     //（下一节的首个识别值从任意源接受，随后来源升级继续收敛）
     currentLessonSrc = "";
+    // 切段即重新武装停播静默（30s 间隔仍防碎切）——若跳转后新节 playing 上报
+    // 因 detector 重注入延迟而丢失，此处重置可避免下一节播完时被锁不切
+    silenceSplitFired = false;
     lastSplitInfo = { reason, at: now() };
     // 播完/静默类切段 = 页面正停在「等待人工点下一节」的状态 → 触发自动连播。
     // url-change 切段说明页面已自行跳转，再点会跳过一节，不广播。
@@ -463,11 +466,7 @@
         pendingUrl = "";
         return;
       }
-      // 第二道闸：换课必换标题——课时名与当前段相同且本段已有数据，视为同课误报
-      if (cur && cur.name && cur.name === currentLesson && cur.bytes > 0) {
-        console.info("[rec] url 稳定但课时名未变，不切节");
-        pendingUrl = "";
-      } else if (lastSplitWasIdle && cur && cur.bytes > 0 && cur.bytes < SEG.idleDiscardBytes) {
+      if (lastSplitWasIdle && cur && cur.bytes > 0 && cur.bytes < SEG.idleDiscardBytes) {
         // 连播点击进下一节：当前段是弹窗期黑屏小段 → 清空缓冲丢弃（recorder 不断流、
         // 段号不跳；cur.name 保留旧值，让课时名信号自然完成下一次切段）
         console.info("[rec] 丢弃节间黑屏小段:", cur.bytes, "bytes");
@@ -570,6 +569,7 @@
   function stoppedPlayingCheck() {
     if (state !== "recording" || mode !== "segment") return;
     if (!hasPlayed) return; // 本场还没播过任何内容
+    if (!(lastPlayingTs > segStartAt)) return; // 本段开始后未观察到过播放（重注入延迟期不启用）
     if (now() - lastPlayingTs < SEG.silenceSec * 1000) return;
     if (silenceSplitFired || now() - lastSilenceSplitAt < SEG.silenceGapMs) return;
     if (requestSplit("silence-gap")) {

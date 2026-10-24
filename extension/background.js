@@ -230,11 +230,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return true; // 异步 sendResponse
 });
 
-// URL 变化（SPA 切课时路由会变）→ 分节信号（M2）
+// URL 变化（SPA 切课时路由会变）→ 分节信号 + 立即补注入检测器
+// （连播跳转后页面重载，detector 恢复越快，playing 上报越早恢复，切节越可靠）
 chrome.tabs.onUpdated.addListener(async (tabId, change) => {
   const st = await getSession();
   if (st.recording && tabId === st.tabId && change.url) {
     chrome.runtime.sendMessage({ type: "offscreen-url", url: change.url }).catch(() => {});
+    const s = await chrome.storage.local.get("settings");
+    injectDetector(tabId, s.settings || {}, st.mode);
   }
 });
 

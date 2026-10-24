@@ -60,7 +60,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.2.11（连播触发源体系重建，端到端诊断 diag_e2e.py 驱动）：① **停播静默替代 audible**——content-detect 轮询上报 playing 状态，offscreen 端"曾播过 + 停播 ≥5s"才静默切节（tab.audible 在部分 Chrome tabCapture 下不可靠，弃用；音频 Analyser 方案测的是音源非扬声器输出，作废）；② **连播定时兜底**——分节模式每 45s 广播一次连播指令（跨域 iframe 播放器的 ended/playing 信号全部缺失时，弹窗类入口最迟 1 分钟被点掉）；③ e2e 验证：点击层 PASS（javascript: 伪协议+委托按钮点击成功）、切段+落盘 PASS（video-ended 驱动）、上游 ended→广播 PASS
 - ✅ v2.2.12（连播点击冷却）：连播广播到达多帧（顶层/iframe）+ 九轮尝试在页面跳转完成前重复执行 → 「下一节」被点两次跳课。修：**点击冷却 15s 跨帧共享**（session.lastAdvanceClick + 帧内快速路径），冷却过期后下一节播完可正常再次连播——**e2e 验证：两节各点一次不跳课**
 - ✅ v2.2.13（连播点击冷却失效根因）：**chrome.storage.session 默认不对 content script 开放**（untrusted 上下文）——v2.2.12 把冷却检查（storage.session.get）放进 content script，Promise 必 reject 被 catch 吞 → 点击分支永不执行 → 连播死（v2.2.11 无此调用故连播成功，版本差异吻合）。修：① SW 启动时 `setAccessLevel({accessLevel:"TRUSTED_AND_UNTRUSTED_CONTEXTS"})`；② attemptAdvance 的冷却检查失败**降级直接点击**（doClick 提取）。**教训：content script 里用 chrome.storage.session 前必须 setAccessLevel，且任何 Promise 链的 catch 不得静默吞掉主流程**
-- ⏳ **待用户 Chrome 验收 v2.2.13**：连播分节录制——弹窗点掉后顺序播下一节（不跳课）、每节一个文件序号连续
+- ✅ v2.2.13：连播点击冷却失效根因（storage.session 默认不对 content script 开放）——修后用户实测：**连播工作，弹窗自动关闭顺序播下一节**；但偶发"两节合并一个文件"
+- ✅ v2.2.14（两节合并根因）：连播跳转后页面重载、detector 等 6s 心跳才重注入 → 窗口内 playing 未上报 → 停播静默的 fired 锁不被播放信号重置 → 下一节播完不切；兜底 URL 切节被"课时名未变"闸拦 → 合并。修：① doSplit 后 silenceSplitFired=false（切段即重新武装，30s 间隔防碎切）；② 停播静默启用收紧 `lastPlayingTs > segStartAt`（重注入延迟期不启用，交 URL 兜底）；③ **tabs.onUpdated URL 变化时立即补注入 detector**（重注入从 6s 压到跳转即刻）；④ 删"课时名未变"闸（URL 稳定 3s 已滤抖动，detector 缺失时 URL 切节兜底）
+- ⏳ **待用户 Chrome 验收 v2.2.14**：连播分节录 6 节——每节一个文件（detector 恢复慢的边界下偶发两节一文件、内容不丢，属降级）
 - ⏳ M3 区域裁剪 → M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 
