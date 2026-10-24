@@ -25,7 +25,6 @@
   let segmentsDone = []; // {seq, name, bytes, filename}
   let courseFolder = "";
   let lastUrl = "";
-  let silenceSince = null;
   let silenceSplitFired = false;
   let splitTimer = null;
   let lastSplitAt = 0;
@@ -53,6 +52,9 @@
   let lastSplitWasIdle = false; // 上次切段是否播完/静默类（此后首个 URL 稳定切段的黑屏小段应丢弃）
   let segStartAt = 0; // 当前段开始时刻（lesson-change 的 URL 联动确认基准）
   let lastSplitInfo = null; // {reason, at}——切节原因（面板临时显示，诊断用）
+  let lastPlayingTs = 0; // 最近一次"页面有视频在播"的上报时刻
+  let hasPlayed = false; // 本场录制是否出现过播放（停播静默判定的启用开关）
+  let lastAdvanceBroadcast = 0; // 最近一次连播广播时刻（定时兜底用）
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -214,7 +216,9 @@
       video: { mandatory: videoMandatory },
     });
 
-    // 回环：tabCapture 后原标签页静音，必须把音频接回扬声器才能边录边听
+    // 回环：tabCapture 后原标签页静音，必须把音频接回扬声器才能边录边听。
+    // 同时挂 AnalyserNode 实测音量——静默检测的信号源（tab.audible 在部分
+    // Chrome 版本的 tabCapture 下不可靠，改用音频流直接分析）
     try {
       audioCtx = new AudioContext();
       audioCtx.createMediaStreamSource(new MediaStream(stream.getAudioTracks())).connect(audioCtx.destination);
@@ -262,9 +266,11 @@
     lastSplitWasIdle = false;
     segStartAt = 0;
     lastSplitInfo = null;
+    lastPlayingTs = 0;
+    hasPlayed = false;
+    lastAdvanceBroadcast = 0;
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
                          // 导致全局闸从开录起失效——开录静默误切段、占闸挤掉真播完信号）
-    silenceSince = null;
     silenceSplitFired = false;
     captureRequested = false;
     startError = "";
@@ -425,6 +431,7 @@
     // url-change 切段说明页面已自行跳转，再点会跳过一节，不广播。
     // 不依赖 video ended 事件：加密播放器（保利威类）不一定触发它。
     if (lastSplitWasIdle && settings.autoNext !== false) {
+      lastAdvanceBroadcast = now();
       chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
     }
     const old = recorder;
@@ -526,27 +533,20 @@
     }
     if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);
     if (data.url) onUrlChange(data.url);
+    if (data.playing) {
+      // 任一帧有视频在播：刷新"最后在播"时刻（停播静默判定的基准）
+      lastPlayingTs = now();
+      hasPlayed = true;
+      silenceSplitFired = false;
+    }
     if (data.ended && state === "recording" && mode === "segment") {
       requestSplit("video-ended"); // 播完是强信号，不受稳定期约束
     }
   }
 
   function onAudible(audible) {
-    if (audible) {
-      // 静默切节后的冷却期内不重新武装（audible 抖动无法借此绕过 30s 间隔）
-      if (now() - lastSilenceSplitAt >= SEG.silenceCooldownMs) {
-        silenceSince = null;
-        silenceSplitFired = false;
-      }
-    } else if (state === "recording" && mode === "segment") {
-      if (silenceSince === null) silenceSince = now();
-      if (!silenceSplitFired && now() - silenceSince >= SEG.silenceSec * 1000
-          && now() - lastSilenceSplitAt >= SEG.silenceGapMs) {
-        silenceSplitFired = true;
-        lastSilenceSplitAt = now();
-        requestSplit("silence-gap");
-      }
-    }
+    // tab.audible 在部分 Chrome 的 tabCapture 下不可靠，静默检测已改用
+    // offscreen 内 AnalyserNode 实测音量（tick 里），本消息仅保留协议兼容
   }
 
   // ---- 定时循环 ----
@@ -564,10 +564,32 @@
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
   }
 
+  // 停播静默：页面侧上报的"视频在播"信号（playing）消失 ≥5 秒 → 视为换节间隙。
+  // 语义比音频/audible 更准：切节的本意就是"内容播完了"。曾播过（hasPlayed）才启用，
+  // 开录初期未点播放时不会误切。
+  function stoppedPlayingCheck() {
+    if (state !== "recording" || mode !== "segment") return;
+    if (!hasPlayed) return; // 本场还没播过任何内容
+    if (now() - lastPlayingTs < SEG.silenceSec * 1000) return;
+    if (silenceSplitFired || now() - lastSilenceSplitAt < SEG.silenceGapMs) return;
+    if (requestSplit("silence-gap")) {
+      silenceSplitFired = true;
+      lastSilenceSplitAt = now();
+    }
+  }
+
   function tick() {
     updateBadge();
     if (state === "stopping") { maybeFinish(); return; }
+    stoppedPlayingCheck();
     checkPendingSplits();
+    // 连播定时兜底：播放器信号（ended/playing 上报）可能因跨域 iframe 全部缺失，
+    // 分节模式下每 45 秒广播一次连播指令，保证弹窗类入口最迟一分钟内被点掉
+    if (state === "recording" && mode === "segment" && settings.autoNext !== false
+        && now() - lastAdvanceBroadcast >= 45000) {
+      lastAdvanceBroadcast = now();
+      chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
+    }
   }
 
   // ---- 消息入口 ----

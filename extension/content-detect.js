@@ -11,7 +11,7 @@
   window.__tabRecDetector = true;
 
   let cfg = { lessonSelector: "h1", courseSelector: "", autoNext: false };
-  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0 };
+  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false };
   const seenVideos = new Set();
 
   // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
@@ -178,7 +178,7 @@
         type: "content-report",
         data: {
           lesson: last.lesson, lessonSrc: last.lessonSrc, course: last.course,
-          url: last.url, ended: last.ended,
+          url: last.url, ended: last.ended, playing: last.playing,
         },
       });
     } catch (e) { /* 扩展上下文失效时静默 */ }
@@ -302,6 +302,14 @@
     });
   }
 
+  // 本帧是否有视频正在播放（供 offscreen 的"停播静默"切节判定）
+  function anyPlaying() {
+    for (const v of document.querySelectorAll("video")) {
+      if (!v.paused && !v.ended) return true;
+    }
+    return false;
+  }
+
   chrome.runtime.onMessage.addListener((m) => {
     if (m && m.type === "detect-config") {
       cfg = m.cfg || cfg;
@@ -321,12 +329,14 @@
     const { name, src } = resolveLessonName();
     const course = pick(cfg.courseSelector);
     const url = location.href;
-    if (forceReport || name !== last.lesson || course !== last.course || url !== last.url) {
+    const playing = anyPlaying();
+    if (forceReport || playing !== last.playing || name !== last.lesson || course !== last.course || url !== last.url) {
       forceReport = false;
       last.lesson = name;
       last.lessonSrc = src;
       last.course = course;
       last.url = url;
+      last.playing = playing;
       report();
     }
     if (last.ended && Date.now() - last.endedAt > 10000) last.ended = false; // 未收到 playing 的兜底解除
