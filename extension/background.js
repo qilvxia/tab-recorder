@@ -154,6 +154,15 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+      case "broadcast-advance": {
+        // offscreen 判定「播完待连播」→ 向录制中标签页所有帧广播连播指令
+        const st = await getSession();
+        if (st.recording && st.tabId != null) {
+          chrome.tabs.sendMessage(st.tabId, { type: "try-advance" }).catch(() => {});
+        }
+        sendResponse({ ok: true });
+        break;
+      }
       case "advance-result": {
         // 连播尝试结果存会话（站点有 console.clear 反调试，控制台日志不可靠，面板直接显示）
         try {

@@ -397,6 +397,12 @@
     }
     lastSplitAt = now();
     lastSplitInfo = { reason, at: now() };
+    // 播完/静默类切段 = 页面正停在「等待人工点下一节」的状态 → 触发自动连播。
+    // url-change 切段说明页面已自行跳转，再点会跳过一节，不广播。
+    // 不依赖 video ended 事件：加密播放器（保利威类）不一定触发它。
+    if ((reason === "video-ended" || reason === "silence-gap") && settings.autoNext !== false) {
+      chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
+    }
     const old = recorder;
     const seg = cur;
     recorder = null;
