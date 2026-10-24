@@ -122,18 +122,34 @@
     try { chrome.runtime.sendMessage({ type: "advance-result", text }); } catch (e) {}
   }
 
+  // 点击冷却：连播广播会到达多个帧（顶层/iframe），且九轮尝试在页面跳转完成前
+  // 可能重复执行——15 秒内任何帧点过即跳过（跨帧共享 session 状态），防跳课
+  let lastClickAt = 0;
+  const ADV_CLICK_COOLDOWN = 15000;
+
   function attemptAdvance() {
     for (const v of document.querySelectorAll("video")) {
       if (!v.paused && !v.ended) return; // 本帧已有视频在播，无需连播
     }
-    const how = clickTextNext() || clickClassHint() || clickListNext();
-    if (how) {
-      advTimers.forEach(clearTimeout);
-      advTimers = [];
-      logAdvance("自动连播：已点击 " + how);
-    } else {
-      logAdvance("自动连播：本帧未找到下一节入口");
-    }
+    if (Date.now() - lastClickAt < ADV_CLICK_COOLDOWN) return; // 本帧冷却
+    chrome.storage.session.get("lastAdvanceClick").then((s) => {
+      if (Date.now() - (s.lastAdvanceClick || 0) < ADV_CLICK_COOLDOWN) {
+        advTimers.forEach(clearTimeout);
+        advTimers = [];
+        logAdvance("自动连播：冷却期内（已有点击），跳过");
+        return;
+      }
+      const how = clickTextNext() || clickClassHint() || clickListNext();
+      if (how) {
+        advTimers.forEach(clearTimeout);
+        advTimers = [];
+        lastClickAt = Date.now();
+        chrome.storage.session.set({ lastAdvanceClick: Date.now() }).catch(() => {});
+        logAdvance("自动连播：已点击 " + how);
+      } else {
+        logAdvance("自动连播：本帧未找到下一节入口");
+      }
+    }).catch(() => {});
   }
 
   function scheduleAdvance() {
