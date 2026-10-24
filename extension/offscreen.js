@@ -455,7 +455,7 @@
       return;
     }
     lastSplitAt = now();
-    lastSplitWasIdle = reason === "silence-gap" || reason === "video-ended";
+    lastSplitWasIdle = reason === "silence-gap"; // video-ended 已挂起（停播判定统一切节）
     // 切段后识别状态重置：mediasession 等高优源的残留值不再挡住下一节识别
     //（下一节的首个识别值从任意源接受，随后来源升级继续收敛）
     currentLessonSrc = "";
@@ -580,11 +580,11 @@
       silenceSplitFired = false;
       if (state === "between") resumeCapture(); // 播放恢复：立即续录（不等 URL 稳定）
     }
-    if (data.ended && state === "recording" && mode === "segment") {
-      // 播完：autoNext 开 → 停止录制并进入节间等待（弹窗期不录废段，跳转成功自动续录）；
-      // 关 → 维持切段行为（分段继续录）
-      if (settings.autoNext !== false) stopAll("advance-pause", true);
-      else requestSplit("video-ended");
+    if (data.ended) {
+      // 播完信号挂起：不立即停录——加密播放器（分片播放）的每个分片结束都会触发
+      // ended，直接停录会把一节课切成碎片段。统一交给停播判定：视频 5 秒内恢复
+      // 播放 = 分片假信号（计数重置不切）；持续无播放 ≥5 秒 = 真播完 → 停录保存
+      // + 广播连播（stoppedPlayingCheck 驱动）。ended 本身不再产生切节。
     }
   }
 
