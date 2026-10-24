@@ -38,6 +38,7 @@
     lessonStableMs: 2000, // 课时名同源变化需稳定这么久才切节（滤网络抖动；语义判定见下）
     silenceCooldownMs: 15000, // 静默切节后的冷却：期间 audible=true 不重新武装静默信号
     idleDiscardBytes: 2 * 1024 * 1024, // 节间黑屏小段丢弃阈值（连播点击前弹窗期录到的部分）
+    minLessonSplitBytes: 4 * 1024 * 1024, // lesson 切节前提：当前段 ≥ 此量（约 8 秒内容）才值得单独成文件，否则只改名并入后续
   };
   // 课时名来源优先级：高优源（播放器元数据/用户选择器）比低优源（页面标题等）可靠。
   // 语义判定（v2.2.5）：未知→首次识别=识别收敛（只补段名不切）；来源升级=识别收敛（不切）；
@@ -469,6 +470,13 @@
     if (pendingLesson && now() - pendingLessonAt >= SEG.lessonStableMs) {
       const p = pendingLesson;
       // 稳定后仍是新值（未被抖回/再变）才切；与本段同名说明只是同课重复上报。
+      // 实质内容前提：当前段太小（开录识别收敛、连播丢弃清缓冲后）不值得单独成
+      // 文件——只更新段名，小段并入后续内容；段已有实质内容才真正切段。
+      if (cur && cur.bytes < SEG.minLessonSplitBytes) {
+        if (cur.name !== p) { console.info("[rec] 段内容不足，lesson 变化只改名:", p); cur.name = p; }
+        pendingLesson = "";
+        return;
+      }
       // URL 联动确认：真换课 = 课时名与本段开始后的 URL 都变过；纯名字变化
       //（开录识别收敛、弹窗期抖动）不切。
       const urlChangedSinceSeg = segStartAt > 0 && lastUrlChangeAt > segStartAt;
