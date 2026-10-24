@@ -3,6 +3,11 @@
 const OFFSCREEN_URL = "offscreen.html";
 let keepaliveCount = 0;
 
+// session 存储默认不对 content script 开放——content-detect 的连播点击冷却需要它
+try {
+  chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" });
+} catch (e) { /* 旧版本浏览器无此 API 时忽略 */ }
+
 async function hasOffscreen() {
   const ctxs = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
   return ctxs.length > 0;

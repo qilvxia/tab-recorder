@@ -139,17 +139,21 @@
         logAdvance("自动连播：冷却期内（已有点击），跳过");
         return;
       }
-      const how = clickTextNext() || clickClassHint() || clickListNext();
-      if (how) {
-        advTimers.forEach(clearTimeout);
-        advTimers = [];
-        lastClickAt = Date.now();
-        chrome.storage.session.set({ lastAdvanceClick: Date.now() }).catch(() => {});
-        logAdvance("自动连播：已点击 " + how);
-      } else {
-        logAdvance("自动连播：本帧未找到下一节入口");
-      }
-    }).catch(() => {});
+      doClick();
+    }).catch(() => doClick()); // 冷却检查失败（如 session 未开放）降级为直接点击
+  }
+
+  function doClick() {
+    const how = clickTextNext() || clickClassHint() || clickListNext();
+    if (how) {
+      advTimers.forEach(clearTimeout);
+      advTimers = [];
+      lastClickAt = Date.now();
+      chrome.storage.session.set({ lastAdvanceClick: Date.now() }).catch(() => {});
+      logAdvance("自动连播：已点击 " + how);
+    } else {
+      logAdvance("自动连播：本帧未找到下一节入口");
+    }
   }
 
   function scheduleAdvance() {
