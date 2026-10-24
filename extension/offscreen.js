@@ -34,17 +34,22 @@
     debounceMs: 1500, silenceSec: 5,
     urlStableMs: 3000, // URL 变化需稳定这么久才切节：进度/token 类参数会持续变化，永不稳定→不切
     silenceGapMs: 30000, // 两次静默切节的最小间隔（防 audible 抖动）
-    minSplitGapMs: 10000, // 全局最小切节间隔：任何信号抖动都无法把切节频率顶到比这更高
-    lessonStableMs: 2000, // 课时名变化需稳定这么久才切节（滤识别源抖动）
+    minSplitGapMs: 10000, // 全局最小切节间隔：未到间隔时挂起信号保留重试（不丢弃）
+    lessonStableMs: 2000, // 课时名同源变化需稳定这么久才切节（滤网络抖动；语义判定见下）
     silenceCooldownMs: 15000, // 静默切节后的冷却：期间 audible=true 不重新武装静默信号
+    idleDiscardBytes: 2 * 1024 * 1024, // 节间黑屏小段丢弃阈值（连播点击前弹窗期录到的部分）
   };
-  // URL/课时名稳定期状态：变化先挂起，稳定后才切（v2.2.1/v2.2.2，治周期性误切）
+  // 课时名来源优先级：高优源（播放器元数据/用户选择器）比低优源（页面标题等）可靠。
+  // 语义判定（v2.2.5）：未知→首次识别=识别收敛（只补段名不切）；来源升级=识别收敛（不切）；
+  // 来源降级=忽略（保持原值）；同源值变化=真换课（走稳定期切节）。时间窗只用于"等变化停止"。
+  const SRC_RANK = { mediasession: 6, selector: 5, "active-item": 4, "playing-label": 3, "video-title": 2, "doc-title": 1 };
+  // URL/课时名稳定期状态：变化先挂起，稳定后才切
   let pendingUrl = "";
   let lastUrlChangeAt = 0;
   let pendingLesson = "";
   let pendingLessonAt = 0;
   let lastSilenceSplitAt = 0;
-  let lastSplitInfo = null; // {reason, at}——切节原因可见化（面板直接读，免开 F12）
+  let lastSplitWasIdle = false; // 上次切段是否播完/静默类（此后首个 URL 稳定切段的黑屏小段应丢弃）
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -250,7 +255,7 @@
     pendingLesson = "";
     pendingLessonAt = 0;
     lastSilenceSplitAt = 0;
-    lastSplitInfo = null;
+    lastSplitWasIdle = false;
     silenceSince = null;
     silenceSplitFired = false;
     captureRequested = false;
@@ -368,25 +373,25 @@
       totalMs: totalActiveMs(),
       bytes,
       segCount: segmentsDone.length,
-      lastSplit: lastSplitInfo,
       error: startError,
     };
   }
 
   // ---- 分节信号 ----
+  // 返回 true = 已接受（排队/执行）；false = 被全局间隔拒绝（调用方可保留挂起重试）
   function requestSplit(reason) {
-    if (state !== "recording" || mode !== "segment") return;
-    // 全局最小切节间隔：风暴类信号在这里被丢弃；真换课事件的多重信号同源，丢弃无害
+    if (state !== "recording" || mode !== "segment") return false;
     if (now() - lastSplitAt < SEG.minSplitGapMs) {
-      console.info("[rec] split rejected (全局间隔):", reason);
-      return;
+      console.info("[rec] split 推迟（全局间隔未到）:", reason);
+      return false;
     }
-    if (splitTimer) return;
+    if (splitTimer) return true; // 已在排队，去抖合并
     console.info("[rec] split signal:", reason);
     splitTimer = setTimeout(() => {
       splitTimer = null;
       doSplit(reason);
     }, SEG.debounceMs);
+    return true;
   }
 
   function doSplit(reason) {
@@ -396,11 +401,11 @@
       return;
     }
     lastSplitAt = now();
-    lastSplitInfo = { reason, at: now() };
+    lastSplitWasIdle = reason === "silence-gap" || reason === "video-ended";
     // 播完/静默类切段 = 页面正停在「等待人工点下一节」的状态 → 触发自动连播。
     // url-change 切段说明页面已自行跳转，再点会跳过一节，不广播。
     // 不依赖 video ended 事件：加密播放器（保利威类）不一定触发它。
-    if ((reason === "video-ended" || reason === "silence-gap") && settings.autoNext !== false) {
+    if (lastSplitWasIdle && settings.autoNext !== false) {
       chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
     }
     const old = recorder;
@@ -422,24 +427,36 @@
     lastUrlChangeAt = now();
   }
 
-  // tick 周期检查：URL/课时名挂起变化的稳定期判定
+  // tick 周期检查：URL/课时名挂起变化的稳定期判定（被全局闸拒绝时保留挂起，下轮重试）
   function checkPendingSplits() {
     if (state !== "recording" || mode !== "segment") { pendingUrl = ""; pendingLesson = ""; return; }
     if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
-      pendingUrl = "";
       // 第二道闸：换课必换标题——课时名与当前段相同且本段已有数据，视为同课误报
       if (cur && cur.name && cur.name === currentLesson && cur.bytes > 0) {
         console.info("[rec] url 稳定但课时名未变，不切节");
-      } else {
-        requestSplit("url-change");
+        pendingUrl = "";
+      } else if (lastSplitWasIdle && cur && cur.bytes > 0 && cur.bytes < SEG.idleDiscardBytes) {
+        // 连播点击进下一节：当前段是弹窗期黑屏小段 → 清空缓冲丢弃（recorder 不断流、
+        // 段号不跳；cur.name 保留旧值，让课时名信号自然完成下一次切段）
+        console.info("[rec] 丢弃节间黑屏小段:", cur.bytes, "bytes");
+        bytes -= cur.bytes;
+        cur.chunks = [];
+        cur.bytes = 0;
+        cur.name = currentLesson; // 新节内容直接用已识别的新课时名
+        activeBaseSeg = 0;
+        lastSplitWasIdle = false;
+        pendingUrl = "";
+      } else if (requestSplit("url-change")) {
+        pendingUrl = "";
       }
     }
     if (pendingLesson && now() - pendingLessonAt >= SEG.lessonStableMs) {
       const p = pendingLesson;
-      pendingLesson = "";
       // 稳定后仍是新值（未被抖回/再变）才切；与本段同名说明只是同课重复上报
       if (p === currentLesson && !(cur && cur.name === p && cur.bytes > 0)) {
-        requestSplit("lesson-change");
+        if (requestSplit("lesson-change")) pendingLesson = "";
+      } else {
+        pendingLesson = "";
       }
     }
   }
@@ -449,14 +466,26 @@
     if (!data) return;
     if (data.lesson) {
       const name = stripLessonPrefix(data.lesson);
+      const src = String(data.lessonSrc || "");
       if (name && name !== currentLesson) {
+        const rank = SRC_RANK[src] || 0;
+        const curRank = SRC_RANK[currentLessonSrc] || 0;
+        if (currentLesson && rank < curRank) {
+          // 来源降级（如播完弹窗期媒体元数据被清、跌到页面标题）：忽略，保持原值
+          return;
+        }
+        const isSourceUpgrade = currentLesson && rank > curRank;
         currentLesson = name;
-        currentLessonSrc = String(data.lessonSrc || "");
+        currentLessonSrc = src;
         if (state === "recording" && mode === "segment") {
-          if (cur && !cur.name) cur.name = name; // 段名为空随时可补写——晚到的标题也能命名本段
-          // 课时名变化挂起走稳定期（识别源在弹窗期可能抖动），稳定后才切
-          pendingLesson = name;
-          pendingLessonAt = now();
+          if (cur && (!cur.name || isSourceUpgrade)) cur.name = name; // 未知段名补写 / 来源升级改写
+          if (isSourceUpgrade) {
+            console.info("[rec] 识别来源升级:", src, name); // 识别收敛，不切节
+          } else if (cur) {
+            // 同源值变化 = 真换课，挂起走稳定期
+            pendingLesson = name;
+            pendingLessonAt = now();
+          }
         }
       }
     }
