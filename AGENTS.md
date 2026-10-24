@@ -55,7 +55,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.2.8（用户提供弹窗 DOM 实锤 + 多方式并存原则）：**入口实锤 = `<p class="next-section">放弃评价观看下一节 »</p>`（Vue 组件，非 a 非 button）**。① **activateEl 完整鼠标事件序列**（pointerdown→mousedown→mouseup→click 全 bubbles，覆盖 click/mousedown/pointerdown 型监听；http(s) 链接仍同页跳转）——原 el.click() 的 click 包含在序列中（增强非替换）；② **class 启发式入口**新增（[class*=next/skip/close/continue] 可见元素）与文本词表、列表下一项**三种方式并存**（通用扩展原则：多方式叠加不替换）；③ 切节闸补漏：URL 切段前置扩展 `!currentLesson || !cur.name`；lesson-change 加 **URL 联动确认**（segStartAt 基准，本段开始后 URL 变过才是真换课，纯名字变化不切）；doSplit 后 currentLessonSrc=""（mediasession 残留不挡下一节识别）；④ 切节原因恢复面板显示（诊断 4s 碎片段用途）
 - ✅ v2.2.8：弹窗 DOM 实锤（入口=`<p class="next-section">` Vue 元素）→ **activateEl 完整鼠标事件序列**（pointerdown→mousedown→mouseup→click，覆盖多事件型监听）+ **class 启发式入口**（next/skip/close/continue）与文本词表、列表下一项**三方式并存**（用户原则：通用扩展多方式叠加不替换）+ 切节闸补漏（URL 前置扩展段名未定不切 / lesson URL 联动 / 切段后识别重置）——**用户实测：连播功能实现（6 节连续自动录制）**
 - ✅ v2.2.9（4s 碎片段收尾，面板实锤 lesson-change）：**lesson 切节加实质内容前提**——当前段 <4MB（约 8 秒内容）时课时名变化**只改名**（小段并入后续内容），段有实质内容才切。覆盖：开录识别收敛/连播丢弃清缓冲后改名（不产生碎片段）/正常换课中途（段已录数分钟正常切）/极短课时 <8s 并入下一节（可接受）
-- ⏳ **待用户 Chrome 验收 v2.2.9**：连播分节录 6 节以上——每节恰好一个文件、序号连续、命名正确
+- ✅ v2.2.9：lesson 切节实质内容前提（段 <4MB 只改名）——**未根治**，4s 碎片段仍在且连播转好转坏随机
+- ✅ v2.2.10（确凿根因修复）：**v2 重写时丢失 v1 的启动静默期**（schedule 里 `lastSplitAt = now()`）→ lastSplitAt=0 → 全局 10s 闸从开录起失效：开录未点播放时静默 5s 信号直闸切出 4s 碎片段 + 误触发 broadcast（错位时刻的连播）+ 占闸 10s 挤掉真播完信号（连播随机成败——v2.2.8 成功/v2.2.9 失败的差异是用户点播放快慢的时序随机性，非代码）。修复：① schedule 恢复启动静默期；② doSplit 加**段内容硬前提**（cur.bytes<2MB 不切不分流——空段任何信号都不切段不广播）。**教训：重写代码时必须逐项核对旧版防御性设计清单**
+- ⏳ **待用户 Chrome 验收 v2.2.10**：①开录不点播放 10s+ 无碎片段 ②连播分节每节一个文件序号连续 ③首节从播放处完整录起
 - ⏳ M3 区域裁剪 → M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

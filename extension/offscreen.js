@@ -262,6 +262,8 @@
     lastSplitWasIdle = false;
     segStartAt = 0;
     lastSplitInfo = null;
+    lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
+                         // 导致全局闸从开录起失效——开录静默误切段、占闸挤掉真播完信号）
     silenceSince = null;
     silenceSplitFired = false;
     captureRequested = false;
@@ -405,6 +407,12 @@
     if (state !== "recording" || mode !== "segment") return;
     if (now() - lastSplitAt < SEG.minSplitGapMs) {
       console.info("[rec] split rejected (全局间隔):", reason);
+      return;
+    }
+    // 内容硬前提：当前段没有实质内容（开录初期未点播放等）时任何信号都不切段、
+    // 不触发连播广播——空段切出去就是碎片段，还会错位占用全局间隔
+    if (cur && cur.bytes < SEG.idleDiscardBytes) {
+      console.info("[rec] split rejected (段内容不足):", reason, cur.bytes, "bytes");
       return;
     }
     lastSplitAt = now();
