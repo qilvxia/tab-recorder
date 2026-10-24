@@ -27,22 +27,22 @@
     return NEXT_WORDS.some((w) => s.includes(w));
   }
 
-  // 策略①：点击文本含「下一节/继续观看」等的可见按钮/链接；<a> 用同页跳转（保持录制在原标签页）
+  // 策略①：扫描全部可见元素的叶子文本（覆盖事件委托场景——入口常是
+  // 无自身 handler 的 div/span，点击冒泡给委托容器）；<a> 同页跳转保录制
   function clickTextNext() {
-    for (const sel of ["a", "button", "[role='button']", "[onclick]"]) {
-      let els = [];
-      try { els = document.querySelectorAll(sel); } catch (e) { continue; }
-      for (const el of els) {
-        if (!visible(el)) continue;
-        const t = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
-        if (!okAdvText(t)) continue;
-        if (el.tagName === "A" && el.href && !el.target) {
-          location.href = el.href;
-        } else {
-          el.click();
-        }
-        return `文本按钮「${t.slice(0, 20)}」`;
+    let els = [];
+    try { els = document.querySelectorAll("body *"); } catch (e) { return ""; }
+    for (const el of els) {
+      if (el.firstElementChild) continue; // 叶子节点：避免拿到整块容器文本
+      if (!visible(el)) continue;
+      const t = String(el.innerText || el.textContent || "").replace(/\s+/g, " ").trim();
+      if (!okAdvText(t)) continue;
+      if (el.tagName === "A" && el.href && !el.target) {
+        location.href = el.href;
+      } else {
+        el.click();
       }
+      return `文本「${t.slice(0, 20)}」`;
     }
     return "";
   }

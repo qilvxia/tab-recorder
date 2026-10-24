@@ -34,11 +34,17 @@
     debounceMs: 1500, silenceSec: 5,
     urlStableMs: 3000, // URL 变化需稳定这么久才切节：进度/token 类参数会持续变化，永不稳定→不切
     silenceGapMs: 30000, // 两次静默切节的最小间隔（防 audible 抖动）
+    minSplitGapMs: 10000, // 全局最小切节间隔：任何信号抖动都无法把切节频率顶到比这更高
+    lessonStableMs: 2000, // 课时名变化需稳定这么久才切节（滤识别源抖动）
+    silenceCooldownMs: 15000, // 静默切节后的冷却：期间 audible=true 不重新武装静默信号
   };
-  // URL 稳定期状态：变化先挂起，稳定后才切（v2.2.1，治 5-8 秒碎片段）
+  // URL/课时名稳定期状态：变化先挂起，稳定后才切（v2.2.1/v2.2.2，治周期性误切）
   let pendingUrl = "";
   let lastUrlChangeAt = 0;
+  let pendingLesson = "";
+  let pendingLessonAt = 0;
   let lastSilenceSplitAt = 0;
+  let lastSplitInfo = null; // {reason, at}——切节原因可见化（面板直接读，免开 F12）
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -241,7 +247,10 @@
     lastUrl = payload.tabUrl || "";
     pendingUrl = "";
     lastUrlChangeAt = 0;
+    pendingLesson = "";
+    pendingLessonAt = 0;
     lastSilenceSplitAt = 0;
+    lastSplitInfo = null;
     silenceSince = null;
     silenceSplitFired = false;
     captureRequested = false;
@@ -359,6 +368,7 @@
       totalMs: totalActiveMs(),
       bytes,
       segCount: segmentsDone.length,
+      lastSplit: lastSplitInfo,
       error: startError,
     };
   }
@@ -366,17 +376,27 @@
   // ---- 分节信号 ----
   function requestSplit(reason) {
     if (state !== "recording" || mode !== "segment") return;
-    if (now() - lastSplitAt < SEG.debounceMs || splitTimer) return;
+    // 全局最小切节间隔：风暴类信号在这里被丢弃；真换课事件的多重信号同源，丢弃无害
+    if (now() - lastSplitAt < SEG.minSplitGapMs) {
+      console.info("[rec] split rejected (全局间隔):", reason);
+      return;
+    }
+    if (splitTimer) return;
     console.info("[rec] split signal:", reason);
     splitTimer = setTimeout(() => {
       splitTimer = null;
-      doSplit();
+      doSplit(reason);
     }, SEG.debounceMs);
   }
 
-  function doSplit() {
+  function doSplit(reason) {
     if (state !== "recording" || mode !== "segment") return;
+    if (now() - lastSplitAt < SEG.minSplitGapMs) {
+      console.info("[rec] split rejected (全局间隔):", reason);
+      return;
+    }
     lastSplitAt = now();
+    lastSplitInfo = { reason, at: now() };
     const old = recorder;
     const seg = cur;
     recorder = null;
@@ -396,17 +416,26 @@
     lastUrlChangeAt = now();
   }
 
-  // tick 周期检查：URL 已稳定且有待切变化 → 判定是否真换课
-  function checkPendingUrl() {
-    if (state !== "recording" || mode !== "segment") { pendingUrl = ""; return; }
-    if (!pendingUrl || now() - lastUrlChangeAt < SEG.urlStableMs) return;
-    pendingUrl = "";
-    // 第二道闸：换课必换标题——课时名与当前段相同且本段已有数据，视为同课误报
-    if (cur && cur.name && cur.name === currentLesson && cur.bytes > 0) {
-      console.info("[rec] url 稳定但课时名未变，不切节");
-      return;
+  // tick 周期检查：URL/课时名挂起变化的稳定期判定
+  function checkPendingSplits() {
+    if (state !== "recording" || mode !== "segment") { pendingUrl = ""; pendingLesson = ""; return; }
+    if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
+      pendingUrl = "";
+      // 第二道闸：换课必换标题——课时名与当前段相同且本段已有数据，视为同课误报
+      if (cur && cur.name && cur.name === currentLesson && cur.bytes > 0) {
+        console.info("[rec] url 稳定但课时名未变，不切节");
+      } else {
+        requestSplit("url-change");
+      }
     }
-    requestSplit("url-change");
+    if (pendingLesson && now() - pendingLessonAt >= SEG.lessonStableMs) {
+      const p = pendingLesson;
+      pendingLesson = "";
+      // 稳定后仍是新值（未被抖回/再变）才切；与本段同名说明只是同课重复上报
+      if (p === currentLesson && !(cur && cur.name === p && cur.bytes > 0)) {
+        requestSplit("lesson-change");
+      }
+    }
   }
 
   // ---- 信号处理 ----
@@ -415,26 +444,30 @@
     if (data.lesson) {
       const name = stripLessonPrefix(data.lesson);
       if (name && name !== currentLesson) {
-        const isFirst = !currentLesson;
         currentLesson = name;
         currentLessonSrc = String(data.lessonSrc || "");
         if (state === "recording" && mode === "segment") {
           if (cur && !cur.name) cur.name = name; // 段名为空随时可补写——晚到的标题也能命名本段
-          if (!isFirst) requestSplit("lesson-change");
+          // 课时名变化挂起走稳定期（识别源在弹窗期可能抖动），稳定后才切
+          pendingLesson = name;
+          pendingLessonAt = now();
         }
       }
     }
     if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);
     if (data.url) onUrlChange(data.url);
     if (data.ended && state === "recording" && mode === "segment") {
-      requestSplit("video-ended"); // 播完是强信号，不受 URL 稳定期约束
+      requestSplit("video-ended"); // 播完是强信号，不受稳定期约束
     }
   }
 
   function onAudible(audible) {
     if (audible) {
-      silenceSince = null;
-      silenceSplitFired = false;
+      // 静默切节后的冷却期内不重新武装（audible 抖动无法借此绕过 30s 间隔）
+      if (now() - lastSilenceSplitAt >= SEG.silenceCooldownMs) {
+        silenceSince = null;
+        silenceSplitFired = false;
+      }
     } else if (state === "recording" && mode === "segment") {
       if (silenceSince === null) silenceSince = now();
       if (!silenceSplitFired && now() - silenceSince >= SEG.silenceSec * 1000
@@ -464,7 +497,7 @@
   function tick() {
     updateBadge();
     if (state === "stopping") { maybeFinish(); return; }
-    checkPendingUrl();
+    checkPendingSplits();
   }
 
   // ---- 消息入口 ----

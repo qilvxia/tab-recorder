@@ -198,6 +198,11 @@ function render(st) {
 
   const tips = [];
   if (st.state === "stopping") tips.push("正在保存文件，请勿关闭浏览器…");
+  if (st.lastSplit) {
+    const d = new Date(st.lastSplit.at);
+    const p2 = (v) => String(v).padStart(2, "0");
+    tips.push(`上次切节：${st.lastSplit.reason}（${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}）`);
+  }
   $("recTip").textContent = tips.join(" ");
 }
 
