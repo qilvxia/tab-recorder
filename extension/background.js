@@ -130,19 +130,38 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case "status": {
+        const { advanceLog } = await chrome.storage.session.get("advanceLog");
         if (await hasOffscreen()) {
           try {
-            sendResponse(await chrome.runtime.sendMessage({ type: "offscreen-status" }));
+            const st = await chrome.runtime.sendMessage({ type: "offscreen-status" });
+            st.advanceLog = advanceLog || [];
+            sendResponse(st);
           } catch {
-            sendResponse({ state: "idle" });
+            sendResponse({ state: "idle", advanceLog: advanceLog || [] });
           }
         } else {
-          sendResponse({ state: "idle", last: (await chrome.storage.session.get("lastSummary")).lastSummary });
+          sendResponse({ state: "idle", last: (await chrome.storage.session.get("lastSummary")).lastSummary, advanceLog: advanceLog || [] });
         }
         break;
       }
       case "content-report": {
         if (await hasOffscreen()) chrome.runtime.sendMessage({ type: "offscreen-content", data: msg.data }).catch(() => {});
+        // 播完事件广播给该标签页所有帧：ended 可能在 iframe 的视频上，而「下一节」
+        // 入口在顶层文档——需要每个帧各自找入口点击（连播）
+        if (msg.data && msg.data.ended && sender.tab && sender.tab.id != null) {
+          chrome.tabs.sendMessage(sender.tab.id, { type: "try-advance" }).catch(() => {});
+        }
+        sendResponse({ ok: true });
+        break;
+      }
+      case "advance-result": {
+        // 连播尝试结果存会话（站点有 console.clear 反调试，控制台日志不可靠，面板直接显示）
+        try {
+          const { advanceLog } = await chrome.storage.session.get("advanceLog");
+          const list = Array.isArray(advanceLog) ? advanceLog : [];
+          list.unshift({ at: Date.now(), text: String(msg.text || "").slice(0, 80) });
+          await chrome.storage.session.set({ advanceLog: list.slice(0, 5) });
+        } catch (e) {}
         sendResponse({ ok: true });
         break;
       }

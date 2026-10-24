@@ -203,6 +203,12 @@ function render(st) {
     const p2 = (v) => String(v).padStart(2, "0");
     tips.push(`上次切节：${st.lastSplit.reason}（${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}）`);
   }
+  const adv = (st.advanceLog || [])[0];
+  if (adv) {
+    const d = new Date(adv.at);
+    const p2 = (v) => String(v).padStart(2, "0");
+    tips.push(`连播：${adv.text}（${p2(d.getHours())}:${p2(d.getMinutes())}:${p2(d.getSeconds())}）`);
+  }
   $("recTip").textContent = tips.join(" ");
 }
 

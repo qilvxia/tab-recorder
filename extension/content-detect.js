@@ -79,22 +79,31 @@
     return "列表下一项";
   }
 
+  // 尝试结果上报扩展（站点有 console.clear 反调试，控制台日志会被清，面板直显）
+  function logAdvance(text) {
+    console.info("[tabrec] " + text);
+    try { chrome.runtime.sendMessage({ type: "advance-result", text }); } catch (e) {}
+  }
+
   function attemptAdvance() {
     for (const v of document.querySelectorAll("video")) {
-      if (!v.paused && !v.ended) return; // 已有视频在播，无需连播
+      if (!v.paused && !v.ended) return; // 本帧已有视频在播，无需连播
     }
     const how = clickTextNext() || clickListNext();
     if (how) {
       advTimers.forEach(clearTimeout);
       advTimers = [];
-      console.info("[tabrec] 自动连播：已点击", how);
+      logAdvance("自动连播：已点击 " + how);
     } else {
-      console.info("[tabrec] 自动连播：未找到下一节入口（文本按钮/列表下一项均未命中）");
+      logAdvance("自动连播：本帧未找到下一节入口");
     }
   }
 
   function scheduleAdvance() {
-    if (!cfg.autoNext) return;
+    if (!cfg.autoNext) {
+      logAdvance("自动连播：未启用（面板开关或不在分节模式）");
+      return;
+    }
     advTimers.forEach(clearTimeout);
     advTimers = [setTimeout(attemptAdvance, 2000), setTimeout(attemptAdvance, 5000), setTimeout(attemptAdvance, 8000)];
   }
@@ -259,6 +268,10 @@
       cfg = m.cfg || cfg;
       forceReport = true; // 新一场录制（新 offscreen 实例）需要立刻拿到当前状态：
                          // 本脚本平时只在页面变化时上报，页面没变就永远不会发
+    } else if (m && m.type === "try-advance") {
+      // SW 广播：任一帧的视频播完了——每个帧各自找「下一节」入口
+      // （ended 可能在 iframe 的视频上，而弹窗入口在顶层文档）
+      scheduleAdvance();
     }
   });
 
