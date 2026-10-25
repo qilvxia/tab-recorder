@@ -57,6 +57,9 @@
   let lastSilenceSplitAt = 0;
   let segStartAt = 0; // 当前段开始时刻（lesson-change 的 URL 联动确认基准）
   let segLessonAtStart = ""; // 本段开始时的课时名快照（URL 切节的「课时名未变否决」基准）
+  let curVideoDur = 0; // 最近上报的视频时长（整秒）
+  let segStartDur = 0; // 本段开始时的视频时长快照（内容更换判定基准）
+  let segContentChanged = false; // 本段内视频时长显著变化 = 内容已更换
   let pendingEntryAt = 0; // 连播入口（播完弹窗）可见挂起时刻：稳定期满停录进节间
   let betweenStartAt = 0; // 进入 between 的时刻（超时自动恢复用）
   let resumeAfterBetween = false; // 点击成功触发的停录：between 就绪后立即续录（跳转加载期连续录，新节零丢失）
@@ -237,6 +240,8 @@
     activeBaseSeg = 0;
     segStartAt = now(); // lesson-change 的 URL 联动确认基准：本段开始后 URL 变过才算真换课
     segLessonAtStart = currentLesson || ""; // URL 切节「课时名未变否决」的基准（见 checkPendingSplits）
+    segStartDur = curVideoDur;
+    segContentChanged = false;
     if (resumeTs === null) resumeTs = now();
     recorder = makeRecorder();
     recorder.start(1000);
@@ -364,6 +369,9 @@
     pendingEntryAt = 0;
     betweenStartAt = 0;
     resumeAfterBetween = false;
+    curVideoDur = 0;
+    segStartDur = 0;
+    segContentChanged = false;
     lastSplitInfo = null;
     lastPlayingTs = 0;
     hasPlayed = false;
@@ -680,6 +688,24 @@
       silenceSplitFired = false;
       pendingEntryAt = 0; // 播放恢复：入口可见信号作废（播放中浮现的贴片「跳过」类误报）
       if (state === "between") resumeCapture(); // 播放恢复：立即续录（不等 URL 稳定）
+    }
+    if (data.videoDur) {
+      // 视频时长显著变化 = 内容更换的实质证据（不同视频时长不同；同一视频重播/
+      // 切清晰度时长不变）。覆盖课时名与播完信号都不可用的站点（如 B 站多 P：
+      // SPA 切 P 无弹窗、加载间隙短、标题不变，URL 的 p 参数变化被课时名否决拦）。
+      curVideoDur = data.videoDur;
+      if (!segContentChanged && segStartDur > 0
+          && Math.abs(curVideoDur - segStartDur) > Math.max(5, segStartDur * 0.05)) {
+        segContentChanged = true;
+        // 双确认才切：URL 本段内也变过（如 p=N）= 真换课，立即停录+续录（复用
+        // 点击切分架构：旧节尾部截止新视频开播前；URL 未变的时长变化（广告/
+        // 渐进缓冲）不切
+        if (state === "recording" && mode === "segment" && lastUrlChangeAt > segStartAt
+            && cur && cur.bytes >= SEG.idleDiscardBytes) {
+          resumeAfterBetween = true;
+          finishSegmentForAdvance("content-change");
+        }
+      }
     }
     if (data.advanceEntry) {
       // 连播入口（播完弹窗类）新出现：挂起待稳定确认。这是 playing/ended 信号

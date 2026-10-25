@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-25 · v2.4.0）
+## 当前状态（2026-10-25 · v2.4.1）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -74,7 +74,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.3.5（点击=确定性切分点）：污染路径有二——①弹窗停录有 3s 稳定期，但连播点击（播完 ended 广播的 2s 轮）更快，点击→跳转→新节开播若抢在停录前，旧节尾部吸进新节开头；②entry 沿丢失/被 playing 作废时退回连续录，lesson-change（2s 稳定+1.5s 去抖）切得更晚，污染 2~4s。"有时候"=页面快慢决定赛跑结果。用户"暂停+sleep"思路方向对（切节点要停录）但不用 sleep（时长不可定）——改用**确定性语义事件**：① **advance-clicked 录制态到达 → 置 resumeAfterBetween + finishSegmentForAdvance("advance-clicked") 立即停录保存旧节（此刻新节未开播，尾部干净）→ maybeFinish 进 between 时立即 resumeCapture（新段亚秒级起，涵盖导航+新节全程）**；② advanceExit（弹窗消失）录制态且 pendingEntryAt 挂起中 → 同样处理（覆盖手动点掉弹窗；pendingEntryAt 前提防控制栏淡出误报）；③ **maybeFinish 的 between 路径跳过锚点下载确认**（offscreen 不关文档，下载浏览器异步完成，确认只对最终收尾必要——否则停录到续录间秒级空窗照样吞新节开头），最终收尾仍等确认；④ finishSegmentForAdvance/resumeCapture 清 pendingEntryAt（残留挂起会在续录后被 entryVisibleCheck 立即误停录）。e2e：切节原因序列变 advance-clicked×2+advance-pause×1（lesson-change 切段消失=污染消除直接证据）；点击/停录/保存/续录 2s 内完成；第 1 节文件比上轮小 0.9MB（=被消除的尾部污染）；三文件 6.4/8.2/8.3MB（第 2/3 节含导航过渡，内容完整）
 - ⏳ ~~待用户 Chrome 复验 v2.3.5~~ → **用户验收通过：路飞学城连续录制效果实现（分节/连播/命名全部满意）**
 - ✅ v2.4.0（**M3 区域裁剪迁移完成**，用户决策：全按推荐、照搬 v1 已验收实现）：① content-crop.js 原样拷入（Shadow DOM 框选浮层：拖拽/比例锁定 自由与16:9与4:3与1:1/双击确认/Esc 取消/最小 40×30/防重复注入）；② SW 三接线：select-crop-region（注入浮层）/crop-region-selected（session 存 cropRegion 绑 tabId）/request-capture 里兜底 crop-selector-cancel 拆残留浮层（v2 真取流时刻，对齐 v1 start 时拆的意图）；③ offscreen：buildCropStream（tab 视频轨→video→canvas setInterval 绘制→captureStream 合原音频轨；letterbox 定律：帧按视口宽缩放、垂直居中补黑边、尺寸向下取偶、<16px 抛错）+ makeRecorder 改录 recStream + beginCapture 失败降级全画面（cropError 面板提示）+ destroyExtra 加 destroyCropPipe + status 返回 crop/cropError；④ popup：裁剪行（框选/清除/状态标签）+ getCropRegion（tabId 绑定校验，换 tab 失效）+ payload.crop 三字段 + tips 显示裁剪状态；⑤ 选区持久化沿用 session+tabId（连播跳转 tabId 不变，天然兼容 between 架构——canvas 管线跨切段复用不重建）。裁剪单段/分节两模式通用。验证：diag_crop 实测 PASS（中心 50% 选区四参照线误差 0.6px ≤2px 判据；顺手移植 diag_e2e 的健壮版焦点授予，旧版 3 轮 assert 在前台被占时必败）；smoke PASS；e2e 回归无 crop 时零变化（切节原因/文件大小与 v2.3.5 基线一致）。已知限制（沿用 v1）：选区固定视口坐标，窗口 resize/缩放/换屏后漂移，需重新框选
-- ⏳ **待用户 Chrome 验收 v2.4.0**：分节模式 + 框选播放器区域连播录 3 节——输出文件只含所选区域、文件分辨率=选区像素、其余验收项维持
+- ⏳ ~~待用户 Chrome 验收 v2.4.0~~ → **M3 裁剪验收待反馈；用户报 B 站多 P 新场景：6 首歌合并一个文件**
+- ✅ v2.4.1（**视频时长变化 = 内容更换实质信号**，修 B 站多 P 合并）：B 站多 P 三个 URL pathname 完全相同仅 query `p=N` 变，SPA 切 P 使四个切节信号全静默——url-change 被「课时名未变否决」拦（p 参数当同课杂音）、lesson-change 无信号（多 P 标题/元数据无同源值变化）、advance-pause 不触发（切 P 间隙 1-2s < 5s）、entry-visible 不触发（无播完弹窗，「下一集」按钮常驻建基线）。**路飞站的否决必须保留**（根除 N 段），为"课时名不可用但内容确实换了"的站点补通用实质信号：**视频时长显著变化**（不同视频时长不同；同一视频重播/切清晰度/翻页时长都不变）。① content-detect 新增 mainVideoDuration()（第一个有限 duration 的 video 取整秒，直播流 Infinity→0 不上报）+ 轮询变化沿上报；② offscreen：segStartDur 快照，时长差异 > max(5s, 5%) → segContentChanged=true；**双确认才切**（本段内 URL 也变过 + 段 ≥2MB）→ resumeAfterBetween + finishSegmentForAdvance("content-change")——复用点击切分架构（旧节尾部截止新视频开播前，新 P 从头完整录制零丢失）；URL 未变的时长变化（广告/渐进缓冲）不切。各场景核对：B 站多 P ✓（URL p 变+时长变）；路飞 ✓（课时名先到先得，时长冗余无害）；重播/清晰度 ✓ 不切；直播 ✓；e2e srcObject 流 duration=NaN 恒 0 零影响 ✓。验证：e2e 回归零变化（切节原因/文件大小与基线一致）+ smoke PASS
+- ⏳ **待用户 Chrome 复验 v2.4.1**：B 站多 P 连播录 3 首以上——每首一个文件、节内无碎段；若文件名为「第N节」（B 站多 P 标题信号未确认），反馈面板「识别标题」行帮助补识别
 - ✅ M3 区域裁剪（v2.4.0 迁移完成）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 
