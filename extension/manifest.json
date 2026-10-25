@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "标签页录制器",
   "short_name": "标签页录制器",
-  "version": "2.4.1",
+  "version": "2.4.2",
   "minimum_chrome_version": "116",
   "description": "录制当前标签页的画面与声音，后台持续录制，自动以播放标题命名，文件保存在浏览器下载目录。",
   "action": {

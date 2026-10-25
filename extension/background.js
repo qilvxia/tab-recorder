@@ -45,7 +45,40 @@ function setBadge(text, color) {
   chrome.action.setBadgeText({ text });
 }
 
+// 扩展实例标识：扩展重载时 session 清空→新 id；SW 空闲重启 session 保留→同 id。
+// 用于识别页面上残留的死 detector（重载后旧 content script 已失效，但页面 window
+// 上的守卫变量还在——新注入会被守卫静默挡掉，识别/连播全失效，用户必须刷新页面）。
+let _instanceIdPromise = null;
+function getInstanceId() {
+  if (!_instanceIdPromise) {
+    _instanceIdPromise = (async () => {
+      const { detectorInstanceId } = await chrome.storage.session.get("detectorInstanceId");
+      if (detectorInstanceId) return detectorInstanceId;
+      const id = "det_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+      await chrome.storage.session.set({ detectorInstanceId: id });
+      return id;
+    })();
+  }
+  return _instanceIdPromise;
+}
+
 async function injectDetector(tabId, settings, mode) {
+  // 先按实例 token 清理死守卫：页面残留的 __tabRecDetector 来自旧扩展实例
+  //（重载前注入，runtime 已死）——token 不一致即清掉，本次 files 注入才能
+  // 重新初始化；token 一致 = 实例存活，守卫正常拦截重复注入（幂等）
+  try {
+    const instId = await getInstanceId();
+    await chrome.scripting.executeScript({
+      target: { tabId, allFrames: true },
+      func: (tok) => {
+        if (window.__tabRecDetTok !== tok) {
+          delete window.__tabRecDetector;
+          window.__tabRecDetTok = tok;
+        }
+      },
+      args: [instId],
+    });
+  } catch (e) { /* 受限页/帧忽略，与 files 注入同等容错 */ }
   // 注入失败自动重试（快速连测时页面常处于加载中），与其它逻辑解耦
   for (let attempt = 0; attempt < 3; attempt++) {
     try {

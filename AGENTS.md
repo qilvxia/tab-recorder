@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-25 · v2.4.1）
+## 当前状态（2026-10-25 · v2.4.2）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -77,7 +77,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ⏳ ~~待用户 Chrome 验收 v2.4.0~~ → **M3 裁剪验收待反馈；用户报 B 站多 P 新场景：6 首歌合并一个文件**
 - ✅ ~~v2.4.1（视频时长变化=内容更换信号）~~ **方案作废回滚**（用户正确指出：两首歌时长完全一致并不罕见——时长是概率信号非确定性语义，等长视频必漏切；只按 URL 切又会让路飞 N 段回归）
 - ✅ v2.4.1 重做（**面板「分节方式」选项**，用户方案——站点差异由用户标注）：① **回滚**时长信号全部代码（content-detect mainVideoDuration/videoDur 上报、offscreen 三变量与 content-change 分支），回到 v2.4.0 切节逻辑；② popup courseRow 新增勾选「URL 变化即切节（B 站多 P 等同页换集站点用）」→ settings.segUrlMode（默认 false）；③ offscreen 的 URL「课时名未变否决」闸按模式生效——segUrlMode 为真时跳过否决（URL 稳定 3s + 段 ≥2MB + 全局闸即切），其余全部信号（lesson-change/advance-pause/entry/点击切分架构）两模式共用，**选项只放开 URL 闸不替换任何信号**（叠加不替换）。默认不勾 = v2.4.0 行为（路飞零变化）。B 站多 P 时序：勾选 → 切 P URL p=N 变化稳定 3s → 立即切段（doSplit 连续录，节尾部可能含下一首开头几秒——该站无弹窗无法提前停录，接受）。验证：残留检查零命中、e2e 回归零变化、smoke PASS
-- ⏳ **待用户 Chrome 复验 v2.4.1 重做**：① B 站多 P 勾选「URL 变化即切节」连播录 3 首——每首一个文件；② 路飞不勾选（默认）复录——确认 N 段不回归；③ M3 裁剪验收（分节+框选区域）仍待反馈
+- ⏳ ~~待用户 Chrome 复验 v2.4.1 重做~~ → **用户先测路飞（未勾选 URL 模式）：识别失效（文件名「01-第1节」）+ 连播失效（弹窗不关）+ 课程名 placeholder 显示不全**
+- ✅ v2.4.2（**detector 死守卫加固**——重载扩展后免刷新）：先验证 v2.4.1 重做回滚完整性：content-detect.js 与 v2.4.0 **零 diff**、offscreen.js 唯一差异是 segUrlMode 闸（不勾选等价）——代码层面路飞零变化、e2e 全绿，排除代码回归。用户两个症状（识别失效+连播失效）同源=content-detect 全链路死亡。根因：**扩展重载后页面未刷新**——旧 detector 已随扩展失效（runtime 死），但页面 window 的 `__tabRecDetector` 守卫残留 → 新注入被首行守卫静默挡掉，死实例占坑。v1 起就有此守卫，测试环境每次新页面未暴露；**上架场景致命**（扩展更新后用户页面不会自动刷新）。修：**实例 token 机制**——SW 经 chrome.storage.session 维护 detectorInstanceId（重载 session 清空→新 id；SW 空闲重启 session 保留→同 id 不误判），injectDetector 改两步注入：① executeScript(func) 检查各帧 `window.__tabRecDetTok`，与当前实例 id 不一致 → delete 守卫 + 写新 token；② 正常 files 注入（守卫已清则重建实例；token 一致=存活则幂等跳过）。**重载扩展后无需刷新页面**，下次 keepalive/开录注入自动重建。content-detect.js 不改（func/files 同 ISOLATED world 共享 window 自定义属性）。顺带：课程名 placeholder 按用户要求简化为「留空 = 自动命名」（原文案超出 popup 宽度显示不全）。验证：语法/smoke/e2e 回归零变化
+- ⏳ **待用户 Chrome 复验 v2.4.2**：① **重载扩展后不刷新路飞页面**直接录制——识别与连播应自动恢复（守卫加固的直接验证）；② 常规复录确认 N 段不回归；③ B 站多 P（勾选 URL 模式）与 M3 裁剪（分节+框选区域）验收仍待反馈
 - ✅ M3 区域裁剪（v2.4.0 迁移完成）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 
