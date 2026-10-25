@@ -132,7 +132,19 @@
       if (!v.paused && !v.ended) return; // 本帧已有视频在播，无需连播
     }
     if (Date.now() - lastClickAt < ADV_CLICK_COOLDOWN) return; // 本帧冷却
-    chrome.storage.session.get("lastAdvanceClick").then((s) => {
+    let req;
+    try {
+      req = chrome.storage.session.get("lastAdvanceClick");
+    } catch (e) {
+      // 扩展重载后旧实例的 chrome API 在调用本身同步抛 "Extension context
+      // invalidated"（then/catch 兜不住同步抛错，会冒成 Uncaught Error）。
+      // 旧实例必须彻底停摆：它仍能操作页面 DOM，降级点击会真的跳课；新实例
+      // 已由注入流程的守卫 token 机制重建接管。
+      advTimers.forEach(clearTimeout);
+      advTimers = [];
+      return;
+    }
+    req.then((s) => {
       if (Date.now() - (s.lastAdvanceClick || 0) < ADV_CLICK_COOLDOWN) {
         advTimers.forEach(clearTimeout);
         advTimers = [];
@@ -378,7 +390,17 @@
   // 快照 report 不携带该状态——forceReport 全量上报会把常驻入口误当弹窗新出现。
   let entryBaselineSet = false;
 
-  setInterval(() => {
+  // 扩展上下文是否已失效（重载后的旧实例）：调用任一 chrome API 同步抛错即死
+  const ctxDead = () => { try { chrome.runtime.getURL(""); return false; } catch (e) { return true; } };
+
+  let pollTimerId = 0;
+  pollTimerId = setInterval(() => {
+    if (ctxDead()) {
+      // 扩展重载后的旧实例：彻底停摆（上报调用已在 try/catch 内静默，
+      // 轮询也停止——新实例已由守卫 token 注入流程重建接管）
+      clearInterval(pollTimerId);
+      return;
+    }
     trackVideos();
     const { name, src } = resolveLessonName();
     const course = pick(cfg.courseSelector);

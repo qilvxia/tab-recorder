@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-26 · v2.4.4）
+## 当前状态（2026-10-26 · v2.4.5）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -83,7 +83,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.4.3（B 站命名诊断驱动修复 + URL 模式即刻切分，用户决策全按推荐）：**diag_bili.py 新诊断**（CfT 打开 B 站多 P 页面，页面上下文采样级联各源）事实：①**active-item 级联在 B 站页面能命中**——`[class*="active" i]` 首个命中即 .video-pod__item.active（"01. 爱江山更爱美人 05:20"，可见、不在 nav），选择器顺序无问题；②mediaSession 空、docTitle/h1 恒为视频总标题（不随 P 变化）→「第N节」现象的前提是当时 detector 全链路未上报——**B 站页面同样死于死守卫**（v2.4.2 已修；URL 模式切段走 SW tabs.onUpdated 不依赖 content-detect，故"分节成功但命名失败"自洽）；③列表项整项 innerText 带尾部时长（"01. xxx 05:20"）——文件名会带时长尾巴，真代码问题。修：① **pickActiveListItem：命中项优先内部 [class*=title] 子元素**（.title-txt 纯集名），整项文本兜底并剥尾部时长（mm:ss / h:mm:ss）——diag_bili 复测确认输出「01. 爱江山更爱美人」；② **segUrlMode 即刻切分**：URL 变化不等 3s 稳定期（SPA 切换快，稳定期内新内容开播吸进旧节尾部=B 站污染几秒的根因）——节流前提（距上次切节 ≥10s + recording + 段 ≥2MB）满足 → resumeAfterBetween + finishSegmentForAdvance("url-change")（旧节尾部截止 URL 变化瞬间干净，新内容加载期起完整续录零丢失）；未到节流间隔退回稳定期路径；③ **finishSegmentForAdvance 补 lastSplitAt=now()**（停录切段计入全局 10s 闸——语义修正，此前 stopAll 路径不占闸）。文件名保留集序号（「05. 仕和遙」自然排序）。验证：diag_bili 复测 title-child 路径命中纯集名、语法/smoke PASS、e2e 回归零变化（默认模式即刻切分支不触发）
 - ⏳ ~~待用户 Chrome 复验 v2.4.3~~ → **用户 grilling 反馈：B 站分节基本合格（个别尾部污染，记录不深究）；准备测 YouTube——附播放列表 DOM 实锤（ytd-playlist-panel-video-renderer[selected] > span#video-title，aria-label 带时长尾巴）**
 - ✅ v2.4.4（**标题识别通用化**——不逐站适配，补通用信号覆盖面）：① ACTIVE_SEL 追加 `[selected]` / `[aria-selected="true" i]`（YouTube 播放列表与 ARIA 组件库的通用"当前项"标记，与 class/aria-current 类叠加并存）；② 标题子元素提取扩 `[id*='title' i]`（YouTube span#video-title 命中；B 站 .title-txt 走 class 路径不变）；③ 现有通用源在 YouTube 的自然覆盖无需改码：mediaSession（rank 6 最高，若播放器设置则自动纯标题）+ doc-title（「歌名 - YouTube」随视频变，pickDocTitle 分割已取歌名）；多源竞争语义正确（mediasession 优先、doc-title 在其存在时降级忽略不误切）。**YouTube 使用指引**：勾选「URL 变化即切节」+ 开站点自带连播（切视频=URL v 参数变化，与 B 站同模式）；**连播点击层维持中文词表不加英文**——英文大站自带连播，我们再点会双推进跳课，attemptAdvance 播放中前置+15s 冷却已尽量规避。**diag_bili.py 增强**：URL 参数化（域名匹配）+ 代理支持（--proxy-server）——CfT 131 无法渲染 2026 年的 YouTube（docTitle 只有壳、面板不渲染），诊断环境硬限制，YouTube 适配靠用户真实 Chrome 复验；B 站采样不受影响。验证：语法/smoke PASS、e2e 回归零变化
-- ⏳ **待用户 Chrome 复验 v2.4.4**：① YouTube 播放列表 + 勾选 URL 模式 + 站点自带连播——每视频一个文件、文件名带视频标题；② 路飞/B 站常规复录不受影响
+- ⏳ ~~待用户 Chrome 复验 v2.4.4~~ → **用户反馈：①重载扩展后 B 站页面 Uncaught Error: "Extension context invalidated"（截图：content-detect.js:135 chrome.storage.session.get 同步抛）；②URL 模式勾选文案不易懂**
+- ✅ v2.4.5（**旧实例停摆加固** + 文案重写）：报错根因——扩展重载后旧检测脚本的**定时器还在跑**（连播九轮尝试的 setTimeout），attemptAdvance 里 `chrome.storage.session.get(...)` 在调用本身**同步抛**（`then().catch()` 只兜 Promise 链内部错误，兜不住同步抛错）→ 冒成 Uncaught。v2.4.2 守卫加固解决了"新注入被挡"，旧实例定时器仍存活报错。修：① **attemptAdvance 的 storage get 包 try/catch**——同步抛错（上下文失效）时清空全部连播定时器并 return（**彻底停摆而非降级**：旧实例仍能操作页面 DOM，降级点击会真的跳课；新实例已由守卫 token 重建接管）；Promise 内失败（session 未开放）维持原降级 doClick 语义；② 700ms 轮询入口加上下文存活自检（chrome.runtime.getURL try/catch）——失效即 clearInterval 自停；③ 文案：URL 模式勾选改为「网址一变就切下一节（B 站多 P 等同页换集的网站勾选；不勾 = 按页面课时名智能切节）」。验证：语法/smoke PASS、e2e 回归零变化
+- ⏳ **待用户 Chrome 复验 v2.4.5**：①重载扩展后不刷新 B 站页面——控制台不再出现 Uncaught Error；②YouTube/路飞/B 站常规复验维持前述指引
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 
