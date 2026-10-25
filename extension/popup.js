@@ -258,6 +258,9 @@ function render(st) {
   if (st.state === "stopping") tips.push("正在保存文件，请勿关闭浏览器…");
   if (st.crop) tips.push(`仅录制所选区域（${st.crop.w}×${st.crop.h}）。`);
   if (st.cropError) tips.push("区域裁剪启动失败，已按全画面录制：" + st.cropError);
+  if (st.crop && st.crop.vw) {
+    tips.push(`裁剪帧 ${st.crop.vw}×${st.crop.vh} · scale ${st.crop.scale.toFixed(3)} · 黑边 ${Math.round(st.crop.letterbox)}px（框选视口 ${st.crop.viewportW}×${st.crop.viewportH}）`);
+  }
   if (st.captureSize && st.captureSize.w) {
     const cv = st.curViewport ? `，当前视口 ${st.curViewport.w}×${st.curViewport.h}·dpr${st.curViewport.dpr}` : "";
     tips.push(`捕获帧 ${st.captureSize.w}×${st.captureSize.h}${cv}`);
