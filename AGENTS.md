@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-26 · v2.4.5）
+## 当前状态（2026-10-26 · v2.4.6）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -85,7 +85,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.4.4（**标题识别通用化**——不逐站适配，补通用信号覆盖面）：① ACTIVE_SEL 追加 `[selected]` / `[aria-selected="true" i]`（YouTube 播放列表与 ARIA 组件库的通用"当前项"标记，与 class/aria-current 类叠加并存）；② 标题子元素提取扩 `[id*='title' i]`（YouTube span#video-title 命中；B 站 .title-txt 走 class 路径不变）；③ 现有通用源在 YouTube 的自然覆盖无需改码：mediaSession（rank 6 最高，若播放器设置则自动纯标题）+ doc-title（「歌名 - YouTube」随视频变，pickDocTitle 分割已取歌名）；多源竞争语义正确（mediasession 优先、doc-title 在其存在时降级忽略不误切）。**YouTube 使用指引**：勾选「URL 变化即切节」+ 开站点自带连播（切视频=URL v 参数变化，与 B 站同模式）；**连播点击层维持中文词表不加英文**——英文大站自带连播，我们再点会双推进跳课，attemptAdvance 播放中前置+15s 冷却已尽量规避。**diag_bili.py 增强**：URL 参数化（域名匹配）+ 代理支持（--proxy-server）——CfT 131 无法渲染 2026 年的 YouTube（docTitle 只有壳、面板不渲染），诊断环境硬限制，YouTube 适配靠用户真实 Chrome 复验；B 站采样不受影响。验证：语法/smoke PASS、e2e 回归零变化
 - ⏳ ~~待用户 Chrome 复验 v2.4.4~~ → **用户反馈：①重载扩展后 B 站页面 Uncaught Error: "Extension context invalidated"（截图：content-detect.js:135 chrome.storage.session.get 同步抛）；②URL 模式勾选文案不易懂**
 - ✅ v2.4.5（**旧实例停摆加固** + 文案重写）：报错根因——扩展重载后旧检测脚本的**定时器还在跑**（连播九轮尝试的 setTimeout），attemptAdvance 里 `chrome.storage.session.get(...)` 在调用本身**同步抛**（`then().catch()` 只兜 Promise 链内部错误，兜不住同步抛错）→ 冒成 Uncaught。v2.4.2 守卫加固解决了"新注入被挡"，旧实例定时器仍存活报错。修：① **attemptAdvance 的 storage get 包 try/catch**——同步抛错（上下文失效）时清空全部连播定时器并 return（**彻底停摆而非降级**：旧实例仍能操作页面 DOM，降级点击会真的跳课；新实例已由守卫 token 重建接管）；Promise 内失败（session 未开放）维持原降级 doClick 语义；② 700ms 轮询入口加上下文存活自检（chrome.runtime.getURL try/catch）——失效即 clearInterval 自停；③ 文案：URL 模式勾选改为「网址一变就切下一节（B 站多 P 等同页换集的网站勾选；不勾 = 按页面课时名智能切节）」。验证：语法/smoke PASS、e2e 回归零变化
-- ⏳ **待用户 Chrome 复验 v2.4.5**：①重载扩展后不刷新 B 站页面——控制台不再出现 Uncaught Error；②YouTube/路飞/B 站常规复验维持前述指引
+- ⏳ ~~待用户 Chrome 复验 v2.4.5~~ → **用户测 YouTube（勾选 URL 模式）：全是 ~10s 碎片视频**（面板证据：识别正常=媒体元数据已出歌名、20 节/3.5 分钟、切节原因全 url-change）
+- ✅ v2.4.6（**URL 指纹规范化**——进度参数剥除，修 YouTube 10s 碎片）：根因——**YouTube 播放中每 ~10s history.replaceState 更新 `&t=` 进度参数**，勾选的「网址一变就切」把每次进度更新当换集信号，10s 全局节流与 t 更新周期同频，每次恰好过闸 → 10s 碎片。B 站 p（换集才变）与 YouTube t（持续变）的 URL 变化模式不同，「网址一变就切」须先剥进度再比较。修（URL 信号单点收口）：**urlFingerprint** = 剥进度类参数（t/t2/time/start/progress/at/ts/timestamp）+ hash 后的 origin+pathname+search；onUrlChange 指纹未变 → 只更新 lastUrl 不进切节挂起；指纹变 → 正常挂起（即刻切/稳定期）。schedule 初始化 lastUrlFp。副作用修正：t 类变化不再污染 lastUrlChangeAt——lesson-change 的 URL 联动判定更准。各场景：YouTube URL 模式 t 忽略/v 即刻切 ✓、智能模式 mediasession→lesson-change ✓（面板已证识别正常）、B 站 p 保留不变 ✓、e2e hash 探针被剥 ✓。node 单测四场景全过（t 变同指纹/v 变异指纹/p 变异指纹/hash 变同指纹）。验证：语法/smoke PASS、e2e 回归零变化
+- ⏳ **待用户 Chrome 复验 v2.4.6**：YouTube 重录——勾选 URL 模式每视频一个文件（v 参数变化切节）；也可试不勾选（智能模式，mediasession 驱动 lesson-change，应等价）；B 站/路飞常规复录确认不受影响
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

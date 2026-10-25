@@ -30,6 +30,7 @@
   let segmentsDone = []; // {seq, name, bytes, filename}
   let courseFolder = "";
   let lastUrl = "";
+  let lastUrlFp = ""; // URL 指纹（剥进度参数与 hash）——判定变化是否构成内容切换
   let silenceSplitFired = false;
   let splitTimer = null;
   let lastSplitAt = 0;
@@ -354,6 +355,7 @@
     currentLesson = "";
     currentLessonSrc = "";
     lastUrl = payload.tabUrl || "";
+    lastUrlFp = urlFingerprint(lastUrl);
     pendingUrl = "";
     lastUrlChangeAt = 0;
     pendingLesson = "";
@@ -576,9 +578,29 @@
   }
 
   // URL 变化统一入口：只挂起不切节，等稳定期由 tick 判定（content 与 SW 两条路径都走这里）
+  // 进度类参数：播放位置追踪（YouTube 播放中每 ~10s replaceState 更新 t），它们的
+  // 变化不代表换内容——URL 模式（segUrlMode）按 URL 变化切节时必须先剥掉，否则
+  // YouTube 全是 ~10s 碎片（t 变化周期恰与全局 10s 节流同频）。B 站 p、YouTube
+  // v/list/index 等课时标识参数不在名单，变化正常生效。
+  const PROGRESS_PARAM_KEYS = ["t", "t2", "time", "start", "progress", "at", "ts", "timestamp"];
+  function urlFingerprint(url) {
+    try {
+      const u = new URL(url);
+      PROGRESS_PARAM_KEYS.forEach((k) => u.searchParams.delete(k));
+      u.hash = ""; // hash 是页面内状态（进度锚点等），不构成内容切换
+      return u.origin + u.pathname + u.search;
+    } catch (e) { return url; }
+  }
+
   function onUrlChange(url) {
     if (!url || url === lastUrl) return;
+    const fp = urlFingerprint(url);
+    if (fp === lastUrlFp) {
+      lastUrl = url; // 记录原样 URL（后续比较用），但指纹未变 = 进度/hash 更新，非内容切换
+      return;
+    }
     lastUrl = url;
+    lastUrlFp = fp;
     pendingUrl = url;
     lastUrlChangeAt = now();
   }
