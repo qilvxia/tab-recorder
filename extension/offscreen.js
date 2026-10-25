@@ -54,6 +54,7 @@
   let segLessonAtStart = ""; // 本段开始时的课时名快照（URL 切节的「课时名未变否决」基准）
   let pendingEntryAt = 0; // 连播入口（播完弹窗）可见挂起时刻：稳定期满停录进节间
   let betweenStartAt = 0; // 进入 between 的时刻（超时自动恢复用）
+  let resumeAfterBetween = false; // 点击成功触发的停录：between 就绪后立即续录（跳转加载期连续录，新节零丢失）
   let lastSplitInfo = null; // {reason, at}——切节原因（面板临时显示，诊断用）
   let lastPlayingTs = 0; // 最近一次"页面有视频在播"的上报时刻
   let hasPlayed = false; // 本场录制是否出现过播放（停播静默判定的启用开关）
@@ -193,6 +194,7 @@
     state = "recording";
     currentLesson = ""; // 重置：等新节识别补写段名（between 期 detector 可能已上报新节名）
     betweenStartAt = 0;
+    pendingEntryAt = 0; // 残留挂起会在续录后被 entryVisibleCheck 立即误停录，必须清
     resumeTs = now();
     startSegment();
     updateBadge();
@@ -285,6 +287,7 @@
     segLessonAtStart = "";
     pendingEntryAt = 0;
     betweenStartAt = 0;
+    resumeAfterBetween = false;
     lastSplitInfo = null;
     lastPlayingTs = 0;
     hasPlayed = false;
@@ -390,15 +393,21 @@
   function maybeFinish() {
     if (state !== "stopping") return;
     if (pendingFinalize > 0) return; // 还有段的收尾没走完，等它把锚点注册进来
-    if (pendingAnchors.size !== 0 && now() <= finishDeadline) return;
     if (pauseAfterStop) {
-      // 节间等待：当前节已保存，recorder 已停（不产数据=不录废段），tabCapture 流
-      // 与音频回环保留——恢复时直接在同流上开新 recorder（零丢帧，无二次捕获风险）
+      // 切段进 between：不等锚点下载确认——offscreen 文档不关闭，下载由浏览器
+      // 异步完成，确认只对最终收尾必要；等确认会让续录晚几秒，新节开头又丢
       pauseAfterStop = false;
       state = "between";
       betweenStartAt = now();
       hasPlayed = false; // 恢复后重新从 playing 上报收敛
       lastAdvanceBroadcast = now();
+      if (resumeAfterBetween) {
+        // 点击成功触发的停录：旧节已保存、页面尚未跳转完成——立即续录，
+        // 新段从点击后亚秒级起，涵盖导航与新节全程（零丢失零污染）
+        resumeAfterBetween = false;
+        resumeCapture();
+        return;
+      }
       updateBadge();
       return;
     }
@@ -597,8 +606,17 @@
       if (state === "recording" && mode === "segment") pendingEntryAt = now();
     }
     if (data.advanceExit) {
-      // 弹窗入口消失反沿：手动点掉弹窗（无点击回报）时也要立即续录
-      if (state === "between") resumeCapture();
+      // 弹窗入口消失（被点掉）：between 态 = 立即续录（手动场景无点击回报）；
+      // 录制态且曾有挂起 = 弹窗出现过又被点掉（点击早于 3s 稳定期）——立即停录
+      // 保存旧节 + 续录，防止跳转后新节开播的画面吸进旧节尾部。pendingEntryAt
+      // 前提防控制栏按钮淡出类误报（没挂起过就不动作）。
+      if (state === "between") {
+        resumeCapture();
+      } else if (state === "recording" && mode === "segment" && pendingEntryAt
+                 && cur && cur.bytes >= SEG.idleDiscardBytes) {
+        resumeAfterBetween = true;
+        finishSegmentForAdvance("advance-exit");
+      }
     }
     if (data.ended) {
       // 播完信号挂起：不立即停录——加密播放器（分片播放）的每个分片结束都会触发
@@ -628,9 +646,10 @@
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
   }
 
-  // 播完类停录公共尾（停播确认/入口可见共用）：更新面板原因 + 立即广播连播 + 停录进节间
+  // 播完类停录公共尾（停播确认/入口可见/点击成功共用）：更新面板原因 + 立即广播连播 + 停录进节间
   function finishSegmentForAdvance(reason) {
     lastSplitInfo = { reason, at: now() }; // 面板「上次切节」可见（stopAll 路径此前不更新，真因不可见）
+    pendingEntryAt = 0; // 停录即失效（续录后残留挂起会被 entryVisibleCheck 立即误停录）
     // 立即广播连播：停录 = 内容播完 = 弹窗正在出现。此前依赖 content 的 ended
     // 事件转发广播，跨域 iframe 信号缺失时只剩 45s 兜底，点击弹窗太慢。
     if (settings.autoNext !== false) {
@@ -704,8 +723,18 @@
         break;
       case "offscreen-audible": onAudible(!!msg.audible); sendResponse({ ok: true }); break;
       case "offscreen-advance-clicked":
-        // 连播点击成功：立即从 between 续录（新节内容零丢失，早于 URL 稳定 3s 兜底）
-        if (state === "between") resumeCapture();
+        // 连播点击成功 = 确定性切分点：
+        // between 态 → 立即续录（早于 URL 稳定 3s 兜底，新节零丢失）；
+        // 录制态 → 点击先于弹窗停录的 3s 稳定期（点击快/页面快）→ 立即停录保存
+        // 旧节（此刻新节尚未开播，尾部干净）+ between 就绪后立即续录——否则
+        // 停录/切段晚于新节开播，新节开头几秒会录进上一节文件
+        if (state === "between") {
+          resumeCapture();
+        } else if (state === "recording" && mode === "segment"
+                   && cur && cur.bytes >= SEG.idleDiscardBytes) {
+          resumeAfterBetween = true;
+          finishSegmentForAdvance("advance-clicked");
+        }
         sendResponse({ ok: true });
         break;
       case "offscreen-tab-closed": sendResponse(stopAll("tab-closed")); break;

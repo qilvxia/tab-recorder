@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-25 · v2.3.4）
+## 当前状态（2026-10-25 · v2.3.5）
 
 - ✅ M0/M1/M2：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -70,7 +70,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.3.3（三根因修复）：**主根因=路飞站（保利威）播放器的 playing/ended 信号对 content script 不可见（playing 从未上报 → hasPlayed 恒 false → 停播判定整条死路径——v2.3.2 的心跳修复在真实站点从未启用过，e2e 修复成立但真实站点不适用）+ 站点 URL 播放中周期变化（分片/token/进度参数）**。① **URL 切节「课时名未变否决」**：startSegment 快照 segLessonAtStart，URL 稳定切段前 `!segLessonAtStart || currentLesson === segLessonAtStart` → 否决（同课参数/杂音变化；段开始未识别、段内才识别出=识别收敛同样否决）——v2.2.14 删"课时名未变闸"释放了 url-change 周期切段（N 段从 v2.3.0 验收出现的时序完全吻合），现以语义化版本恢复；真换课由 lesson-change 通道（2s 稳定+URL 联动）承担，识别延迟由 onUpdated 立即补注入覆盖；② **修 isSourceUpgrade 误判**：`!!currentLessonSrc && rank > curRank`——切段后 src 清空，空源参与升级判定使下一次上报必误判升级并改写已有段名（合并段命名成下一节的根因）；空源=首次/重识别，只补空名；③ **入口可见型播完停录**（信号缺失站点的播完主通道）：content-detect class 启发式（next/skip/continue 可见元素，close 不进此信号）**变化沿事件化**上报 advanceEntry（独立消息，快照 report 不携带——防 forceReport 全量上报把常驻入口误当弹窗；首轮建基线，注入时常驻可见入口不算新出现，重注入重建基线）→ offscreen 挂起 pendingEntryAt，稳定 3s + 段 ≥2MB → finishSegmentForAdvance("entry-visible") 停录进 between；播放中浮现的贴片「跳过」类误报由 playing 心跳作废挂起；④ **between 30s 超时自动恢复**（入口误报无跳转/加载过慢兜底）；⑤ 面板「播放信号：✓/✗」显示（复验一击定位信号可达性）。三种播完信号并存：停播 5s（playing 型）/入口可见（entry 型）/45s 定时兜底。e2e 探针升级：弹窗按钮补 class="next-section"（对齐路飞 DOM）+ 节内每 15s 变 hash（模拟分片参数）——验证：hash 探针零切段、url-change 切段消失、三文件命名与节号一致（上一轮的时序错位命名消失=isSourceUpgrade 修复直接证据）
 - ⏳ ~~待用户 Chrome 验收 v2.3.3~~ → **用户验收通过：分节自动播放、录制、每小节一文件全部实现**；新缺陷：除第一小节外每小节丢失开头约 5s
 - ✅ v2.3.4（开头 5s 丢失修复——between 恢复时机提前）：路飞站 playing 信号不可见 → between 恢复只能靠「URL 稳定 3s」→ 连播点击（t0）后新节视频 t0+2~4s 自动开播，URL 稳定在 t0+4~6s 才续录 → 开头 2~5s 已播未录（第一小节不丢：开录时录制先于用户点播放）。修（恢复源多方式并存，先到先得）：① **连播点击成功即续录（主）**——doClick 成功处发 `advance-clicked`（同步回报早于导航）→ SW 转发 `offscreen-advance-clicked` → offscreen between 态 resumeCapture；续录从点击瞬间起，新节零丢失，开头多 1~3s 加载画面（内容完整优先）；resume 后段名空由识别补写，lesson-change 的 <4MB 只改名逻辑保证识别期不产生碎段；② **弹窗入口消失反沿即续录（辅）**——entry 可见性 true→false 发 advanceExit（走 content-report 转发），覆盖手动点掉弹窗场景；控制栏按钮淡出类误报后果=提前恢复录旧页静止至跳转，无害。URL 稳定 3s 与 30s 超时兜底保留。e2e（信号可达路径）：三文件大小 7.3/8.3/7.2MB 接近理论值（±8%）量化验证零丢失；点击后 playing 心跳把 entry 挂起正确作废（信号可达站点 playing 优先、entry 只在信号缺失站点承担）；节内 hash 探针零切段、命名与节号一致维持
-- ⏳ **待用户 Chrome 复验 v2.3.4**：后续每小节从视频开播处完整起录（开头最多几秒页面加载画面，课程内容不缺）；其余维持 v2.3.3 通过状态
+- ⏳ ~~待用户 Chrome 复验 v2.3.4~~ → **用户反馈：有时候后一节前几秒录到前一节**（问"两节中间暂停+sleep 能否解决"）
+- ✅ v2.3.5（点击=确定性切分点）：污染路径有二——①弹窗停录有 3s 稳定期，但连播点击（播完 ended 广播的 2s 轮）更快，点击→跳转→新节开播若抢在停录前，旧节尾部吸进新节开头；②entry 沿丢失/被 playing 作废时退回连续录，lesson-change（2s 稳定+1.5s 去抖）切得更晚，污染 2~4s。"有时候"=页面快慢决定赛跑结果。用户"暂停+sleep"思路方向对（切节点要停录）但不用 sleep（时长不可定）——改用**确定性语义事件**：① **advance-clicked 录制态到达 → 置 resumeAfterBetween + finishSegmentForAdvance("advance-clicked") 立即停录保存旧节（此刻新节未开播，尾部干净）→ maybeFinish 进 between 时立即 resumeCapture（新段亚秒级起，涵盖导航+新节全程）**；② advanceExit（弹窗消失）录制态且 pendingEntryAt 挂起中 → 同样处理（覆盖手动点掉弹窗；pendingEntryAt 前提防控制栏淡出误报）；③ **maybeFinish 的 between 路径跳过锚点下载确认**（offscreen 不关文档，下载浏览器异步完成，确认只对最终收尾必要——否则停录到续录间秒级空窗照样吞新节开头），最终收尾仍等确认；④ finishSegmentForAdvance/resumeCapture 清 pendingEntryAt（残留挂起会在续录后被 entryVisibleCheck 立即误停录）。e2e：切节原因序列变 advance-clicked×2+advance-pause×1（lesson-change 切段消失=污染消除直接证据）；点击/停录/保存/续录 2s 内完成；第 1 节文件比上轮小 0.9MB（=被消除的尾部污染）；三文件 6.4/8.2/8.3MB（第 2/3 节含导航过渡，内容完整）
+- ⏳ **待用户 Chrome 复验 v2.3.5**：上一节文件尾部不再出现下一节开头；每节从视频开播处完整起录（开头允许几秒加载画面）；异常时反馈面板「上次切节」+「播放信号」
 - ⏳ M3 区域裁剪 → M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 
