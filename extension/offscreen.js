@@ -298,18 +298,30 @@
     const videoMandatory = { chromeMediaSource: "tab", chromeMediaSourceId: streamId };
     const fps = Number(pendingSettings.frameRate);
     if (fps > 0) videoMandatory.maxFrameRate = fps;
-    // 帧尺寸约束：视口物理尺寸（ideal 语义，Chrome 按最接近档位给帧且内容等比
-    // 渲染）——帧尺寸不约束时 Chrome 自行协商且会话间会漂（漂到非等比档位时
-    // 裁剪映射变形，YouTube 实测「内容缩放错位」）
+    // 帧尺寸约束：视口物理尺寸。legacy mandatory 语法**不支持 {ideal} 对象**
+    //（v2.5.1 被静默忽略）——数字直填（精确语义）。Chrome 的 tabCapture 帧协商
+    // 疑似以屏为准而非窗口视口（实测帧=显示器逻辑整屏 2240×1400 而窗口更小），
+    // 帧与视口内容非等比 → 裁剪映射变形（YouTube「内容缩放错位」）。
     const cap = pendingPayload && pendingPayload.capture;
     if (cap && cap.w > 0 && cap.h > 0) {
-      videoMandatory.width = { ideal: cap.w };
-      videoMandatory.height = { ideal: cap.h };
+      videoMandatory.width = cap.w;
+      videoMandatory.height = cap.h;
     }
-    stream = await navigator.mediaDevices.getUserMedia({
-      audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
-      video: { mandatory: videoMandatory },
-    });
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
+        video: { mandatory: videoMandatory },
+      });
+    } catch (e) {
+      if (!cap) throw e; // 未加约束时的失败与本机制无关，原样抛出
+      // 过约束（Chrome 给不了精确尺寸/不接受宽高）：删约束降级重试，录制不失败
+      delete videoMandatory.width;
+      delete videoMandatory.height;
+      stream = await navigator.mediaDevices.getUserMedia({
+        audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
+        video: { mandatory: videoMandatory },
+      });
+    }
     try {
       const vs = stream.getVideoTracks()[0].getSettings();
       captureSize = { w: vs.width || 0, h: vs.height || 0 };
