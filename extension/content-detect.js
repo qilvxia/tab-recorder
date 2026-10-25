@@ -11,7 +11,7 @@
   window.__tabRecDetector = true;
 
   let cfg = { lessonSelector: "h1", courseSelector: "", autoNext: false };
-  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false, videoDur: 0 };
+  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false };
   const seenVideos = new Set();
 
   // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
@@ -202,7 +202,6 @@
         data: {
           lesson: last.lesson, lessonSrc: last.lessonSrc, course: last.course,
           url: last.url, ended: last.ended, playing: last.playing,
-          videoDur: last.videoDur,
         },
       });
     } catch (e) { /* 扩展上下文失效时静默 */ }
@@ -334,17 +333,6 @@
     return false;
   }
 
-  // 本帧主视频时长（整秒，供 offscreen 的"内容更换"判定）：不同视频时长不同，
-  // 同一视频重播/切清晰度时长不变——与课时名信号互补的换课实质证据。
-  // 直播流 duration=Infinity/NaN → 0（视为未知）。
-  function mainVideoDuration() {
-    for (const v of document.querySelectorAll("video")) {
-      const d = v.duration;
-      if (Number.isFinite(d) && d > 0) return Math.round(d);
-    }
-    return 0;
-  }
-
   // 连播入口可见性（播完弹窗类信号，offscreen 用于"播完即停录"）：class 启发式
   // 轻量查询，词表扫描留给点击层。只认 next/skip/continue——close 类在播放中
   // 会误命中（关闭按钮），不进此信号。播放中的贴片「跳过」类误报由 playing
@@ -398,15 +386,13 @@
       } catch (e) { /* 扩展上下文失效时静默 */ }
     }
     last.entryVisible = entryVisible;
-    const videoDur = mainVideoDuration();
-    if (forceReport || playing !== last.playing || name !== last.lesson || course !== last.course || url !== last.url || videoDur !== last.videoDur) {
+    if (forceReport || playing !== last.playing || name !== last.lesson || course !== last.course || url !== last.url) {
       forceReport = false;
       last.lesson = name;
       last.lessonSrc = src;
       last.course = course;
       last.url = url;
       last.playing = playing;
-      last.videoDur = videoDur;
       report();
     } else if (playing) {
       // 播放心跳：offscreen 的停播判定（5s 闸）依赖 playing 上报持续刷新

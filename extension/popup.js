@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 
 const DEFAULT_SETTINGS = {
   format: "mp4", videoBitrate: 4000000, frameRate: 30, audioBitrate: 128000,
-  startDelaySeconds: 0, autoNext: true,
+  startDelaySeconds: 0, autoNext: true, segUrlMode: false,
   lessonSelector: "h1", lessonPrefix: "^正在播放[:：]\\s*",
 };
 
@@ -67,6 +67,12 @@ async function init() {
   $("autoNext").onchange = async () => {
     const cur = await loadSettings();
     cur.autoNext = $("autoNext").checked;
+    await chrome.storage.local.set({ settings: cur });
+  };
+  $("segUrlMode").checked = s.segUrlMode === true;
+  $("segUrlMode").onchange = async () => {
+    const cur = await loadSettings();
+    cur.segUrlMode = $("segUrlMode").checked;
     await chrome.storage.local.set({ settings: cur });
   };
 
