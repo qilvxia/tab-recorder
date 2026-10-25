@@ -404,7 +404,10 @@
     trackVideos();
     const { name, src } = resolveLessonName();
     const course = pick(cfg.courseSelector);
-    const url = location.href;
+    // url 只报顶层帧：iframe 的 location.href（广告容器/预创建组件常见 about:blank）
+    // 与换课无关，混进来会与顶层地址交替覆盖、每次交替都判为内容变化 → 周期性碎切
+    //（YouTube 实测 ~10s 碎片根因）
+    const url = window.top === window ? location.href : "";
     const playing = anyPlaying();
     const entryVisible = nextEntryVisible();
     if (!entryBaselineSet) {

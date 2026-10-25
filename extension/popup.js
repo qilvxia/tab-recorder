@@ -245,7 +245,7 @@ function render(st) {
     $("curLesson").textContent = les.name || (st.mode === "segment" ? "正在识别课时名…" : "单段录制中");
     $("curSeq").textContent = st.mode === "segment" ? `第 ${st.seq} 节` : "";
     const les2 = les.name
-      ? `识别标题（${SRC_LABEL[les.src] || les.src || "未知来源"}）：${les.name}`
+      ? `识别标题${les.src ? `（${SRC_LABEL[les.src] || les.src}）` : ""}：${les.name}`
       : "识别标题：未识别到（该节将命名为「第N节」）";
     $("detTitle").textContent = les2;
   }

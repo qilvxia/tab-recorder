@@ -600,6 +600,7 @@
 
   function onUrlChange(url) {
     if (!url || url === lastUrl) return;
+    if (/^about:blank/i.test(url)) return; // 防御：空 iframe 地址不是内容切换（顶层帧判定已在 content 侧收口）
     const fp = urlFingerprint(url);
     const changed = fp !== lastUrlFp;
     urlLog.push({ u: String(url).slice(0, 120), changed, at: now() });
