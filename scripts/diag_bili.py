@@ -16,6 +16,7 @@ CHROME_CFT = "E:/ZCodeProjects/tab-recorder/.cft/chrome-win64/chrome.exe"
 PORT = 9253
 PROFILE = "E:/ZCodeProjects/tab-recorder/.diag-bili-profile"
 DEFAULT_URL = "https://www.bilibili.com/video/BV15j411H7Zc/"
+PROXY = "127.0.0.1:7897"  # 本机代理（访问 YouTube 等外网站点必需；B 站直连不受影响）
 
 # 在页面上下文采样级联各源（与 content-detect 逻辑同源，独立内联不依赖扩展授权）
 PROBE_JS = r"""(() => {
@@ -25,7 +26,7 @@ PROBE_JS = r"""(() => {
   const GENERIC = new Set(["首页","课程","目录","简介","评论","下载","分享","全屏","播放","暂停","笔记","问答","资料","讨论","公告","讲义","习题","测试","考试","更多"]);
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
 
-  const ACTIVE_SEL = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class*="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[class*="active" i]'].join(",");
+  const ACTIVE_SEL = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class*="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[selected]','[aria-selected="true" i]','[class*="active" i]'].join(",");
   let activeHits = [];
   try {
     activeHits = [...document.querySelectorAll(ACTIVE_SEL)].slice(0, 14).map((el) => ({
@@ -63,6 +64,7 @@ PROBE_JS = r"""(() => {
     h1: clean((document.querySelector("h1") || {}).textContent || ""),
     biliActiveTitleTxt: clean((document.querySelector(".video-pod__item.active .title-txt") || {}).textContent || "(NOT FOUND)"),
     biliActiveFullText: clean((document.querySelector(".video-pod__item.active") || {}).innerText || "(NOT FOUND)").slice(0, 60),
+    ytSelectedTitle: clean((document.querySelector("ytd-playlist-panel-video-renderer[selected] #video-title") || {}).textContent || "(NOT FOUND)"),
     // 修复后 pickActiveListItem 的模拟：首个可见 active 命中 → 内部 title 子元素优先 → 整项剥尾部时长兜底
     simNewLogic: (() => {
       const els = document.querySelectorAll(ACTIVE_SEL);
@@ -120,15 +122,19 @@ def main():
     import websocket
 
     url = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_URL
-    shutil.rmtree(PROFILE, ignore_errors=True)
-    proc = subprocess.Popen([
+    host = urllib.request.urlparse(url).hostname or ""
+    # 外网站点（youtube.com 等）走本机代理；bilibili.com 在直连白名单外也代理可达
+    args = [
         CHROME_CFT, "--remote-debugging-port=%d" % PORT,
         "--user-data-dir=" + PROFILE,
         "--window-size=1400,900", "--window-position=20,20",
         "--no-first-run", "--no-default-browser-check",
         "--autoplay-policy=no-user-gesture-required",
+        "--proxy-server=" + PROXY,
         url,
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ]
+    shutil.rmtree(PROFILE, ignore_errors=True)
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     try:
         for _ in range(30):
@@ -142,16 +148,16 @@ def main():
         page = None
         for _ in range(20):
             for t in http_json("/json/list"):
-                if t.get("type") == "page" and "bilibili.com" in t.get("url", ""):
+                if t.get("type") == "page" and host in t.get("url", ""):
                     page = t
                     break
             if page:
                 break
             time.sleep(1)
-        assert page, "B 站页面未打开"
+        assert page, "目标页面未打开（%s）" % host
         pc = CDP(page["webSocketDebuggerUrl"])
         pc.cmd("Runtime.enable")
-        time.sleep(6)  # 等页面与播放器初始化（分集列表渲染）
+        time.sleep(15)  # 等页面与播放器初始化（YouTube 慢加载需更久）
 
         for i in range(3):
             if i:

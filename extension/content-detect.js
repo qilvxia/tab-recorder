@@ -224,12 +224,15 @@
   }
 
   // ③ 高亮列表项：课程目录里标记为当前/正在播放的条目
+  // [selected]/[aria-selected]：YouTube 播放列表（ytd-*-renderer[selected]）与
+  // ARIA 组件库的通用"当前项"标记——与 class/aria-current 类标记叠加并存
   const ACTIVE_SEL = [
     '[aria-current="true" i]', '[aria-current="page" i]',
     'li[class*="active" i] a', 'a[class*="active" i]',
     'li[class*="current" i] a', 'a[class*="current" i]',
     'li[class*="on"] a', '[class*="playing" i]:not(video)',
-    'dd[class*="active" i]', '[class*="active" i]',
+    'dd[class*="active" i]', '[selected]', '[aria-selected="true" i]',
+    '[class*="active" i]',
   ].join(",");
 
   function pickActiveListItem() {
@@ -239,8 +242,9 @@
       if (!visible(el)) continue;
       if (el.closest("nav,header,footer")) continue; // 导航/页眉页脚里的高亮不是课时
       // 命中项优先取内部标题子元素——分集/目录列表项常为「序号+标题+时长」混排
-      //（B 站列表项整项 innerText="01. xxx 05:20"，.title-txt 才是纯集名）
-      for (const t of el.querySelectorAll("[class*='title' i]")) {
+      //（B 站列表项整项 innerText="01. xxx 05:20"，.title-txt 才是纯集名；
+      // YouTube 列表项是 span#video-title——class 或 id 含 title 都认）
+      for (const t of el.querySelectorAll("[class*='title' i],[id*='title' i]")) {
         const s = okName(t.textContent);
         if (s && !GENERIC_WORDS.has(s)) return s;
       }
