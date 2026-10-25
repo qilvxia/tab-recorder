@@ -11,7 +11,7 @@
   window.__tabRecDetector = true;
 
   let cfg = { lessonSelector: "h1", courseSelector: "", autoNext: false };
-  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false };
+  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false, viewport: null };
   const seenVideos = new Set();
 
   // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
@@ -214,6 +214,7 @@
         data: {
           lesson: last.lesson, lessonSrc: last.lessonSrc, course: last.course,
           url: last.url, ended: last.ended, playing: last.playing,
+          viewport: last.viewport,
         },
       });
     } catch (e) { /* 扩展上下文失效时静默 */ }
@@ -425,7 +426,13 @@
       } catch (e) { /* 扩展上下文失效时静默 */ }
     }
     last.entryVisible = entryVisible;
-    if (forceReport || playing !== last.playing || name !== last.lesson || course !== last.course || url !== last.url) {
+    // 实时视口只报顶层帧（裁剪映射的基准观测，缩放/窗口变化即沿上报）
+    if (window.top === window) {
+      last.viewport = { w: window.innerWidth, h: window.innerHeight, dpr: window.devicePixelRatio };
+    }
+    const vpChanged = JSON.stringify(last.viewport) !== last.vpJson;
+    if (vpChanged) last.vpJson = JSON.stringify(last.viewport);
+    if (forceReport || vpChanged || playing !== last.playing || name !== last.lesson || course !== last.course || url !== last.url) {
       forceReport = false;
       last.lesson = name;
       last.lessonSrc = src;

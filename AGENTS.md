@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-26 · v2.4.8）
+## 当前状态（2026-10-26 · v2.4.9）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -91,7 +91,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.4.7（**URL 变化观测面**——拿真实 URL 流定位，停止盲猜参数名）：① offscreen `urlLog`（最近 5 条）：onUrlChange **每次调用**（含被指纹忽略的）记录 `{u: 原样URL截断120字符, changed: 指纹是否判定为内容变化, at}`；status 返回最近 2 条；schedule 清空；② popup 录制中 tips 显示「最近网址变化：<URL>（内容标识变化 | 仅进度参数）」——changed 标志直接回答指纹判定认不认为它是换内容：显示「内容标识变化」却仍同视频 → 剥除名单缺参数（URL 样本到手即补）；显示「仅进度参数」却仍被切 → 切节路径另有其人（结合「上次切节」定位）。验证：语法/smoke PASS、e2e 回归零变化
 - ⏳ ~~待用户复验 v2.4.7（观测轮）~~ → **用户面板截图实锤：「最近网址变化：about:blank（内容标识变化）」+ 已保存 4 节/总时长 00:50（~12.5s 周期）+ 播放信号 ✗（between 窗口采样）+ 识别标题（未知来源）**
 - ✅ v2.4.8（**URL 信号只认顶层帧**——观测面定位的真根因，修 YouTube 周期性碎切）：观测数据实锤——检测脚本注入**所有帧**，每帧上报自己的 location.href；**YouTube 页面存在 src=about:blank 的空 iframe**（预创建组件容器，常见），与顶层地址**交替覆盖** offscreen 的 lastUrl/指纹——每次交替（顶层 watch?v=X ↔ iframe about:blank）都判为"内容标识变化" → 切节挂起 → 即刻切 → 周期性碎切。**这同时解释 v2.4.6 剥 t 参数无效：真正变化源是多帧 URL 交替，不是 t**。辅助证据自洽：「播放信号 ✗」= 即刻切循环的 between 窗口恰被采样到（hasPlayed 重置态）；「未知来源」= url-change 切段清空识别源的显示残留（值仍是切段前 mediasession 歌名）。修（语义收窄：只有顶层页面的地址构成切节信号）：① **content-detect 轮询 url 改 `window.top === window ? location.href : ""`**——iframe 帧不上报 url（lesson/playing/course 照报，它们的切节语义与 iframe 地址无关）；② offscreen onUrlChange 防御忽略 about:blank（SW tabs.onUpdated 路径兜底）；③ popup「识别标题（未知来源）」显示修正：src 空时不显示来源括号。各场景：YouTube about:blank iframe 不再上报 → 同视频零切节、v 变化即切 ✓；B 站/路飞切集换课都是顶层导航，iframe url 本就无关 → 行为不变；e2e 单页无 iframe 零影响。验证：语法/smoke PASS、e2e 回归零变化
-- ⏳ **待用户 Chrome 复验 v2.4.8**：YouTube 重录——每视频一个文件、文件名带歌名；面板「播放信号」应回归 ✓（切节循环消失）；B 站/路飞常规复录不受影响
+- ⏳ ~~待用户 Chrome 复验 v2.4.8~~ → **用户反馈：YouTube 裁剪有偏移（路飞/B 站正确）。grilling 澄清：无全屏、普通布局、形态=内容缩放错位（内容被放大/缩小且位置不对）**
+- ✅ v2.4.9（**捕获帧/视口观测面**——缩放错位用数字定位，不改变任何行为）：三站共用同一套映射数学（diag_crop 验收），偏移根源=scale 两端之一失真（候选：YouTube 站点缩放记忆/多屏 DPI/捕获帧与视口关系异常），数字当前不可见。① content-detect 顶层帧上报实时视口 `{w: innerWidth, h: innerHeight, dpr}`（变化沿 + forceReport 携带，与 url 同顶层判定）；② offscreen：cropOut 扩展 `{w,h,vw,vh,scale,letterbox,viewportW,viewportH}`（映射参数入面板）、beginCapture 读视频轨 getSettings 存 captureSize（无裁剪也可见）、curViewport 落地 + **viewportDrift 检测**（当前视口 ≠ 框选快照 → 面板警告「建议重新框选」，仅提示不阻断——v2.4.0 决策暂缓的漂移检测，YouTube 场景令其变成实际需求）；③ popup 录制中显示「捕获帧 W×H，当前视口 W×H·dpr N」+ 漂移警告。**判读表**（复验对照）：帧宽/视口宽≈dpr → 定律成立；≠dpr 且偏差固定 → 捕获缩放异常；快照≠当前视口 → 框选后基准变了；帧高−视口高×scale → 黑边量对照偏移方向。**对照实验**：Ctrl+0 重置缩放重录、确认同显示器（多屏 DPI）、框参照物看偏移方向。验证：语法/smoke PASS、e2e 回归零变化
+- ⏳ **待用户复验 v2.4.9（观测轮）**：YouTube 重录后展开面板——「捕获帧/当前视口」数字行 + 漂移警告是否出现 + 判读表对照；顺带 Ctrl+0 重置缩放/同显示器对照实验
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

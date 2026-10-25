@@ -258,6 +258,13 @@ function render(st) {
   if (st.state === "stopping") tips.push("正在保存文件，请勿关闭浏览器…");
   if (st.crop) tips.push(`仅录制所选区域（${st.crop.w}×${st.crop.h}）。`);
   if (st.cropError) tips.push("区域裁剪启动失败，已按全画面录制：" + st.cropError);
+  if (st.captureSize && st.captureSize.w) {
+    const cv = st.curViewport ? `，当前视口 ${st.curViewport.w}×${st.curViewport.h}·dpr${st.curViewport.dpr}` : "";
+    tips.push(`捕获帧 ${st.captureSize.w}×${st.captureSize.h}${cv}`);
+  }
+  if (st.viewportDrift && st.crop) {
+    tips.push(`⚠ 窗口/页面大小已变化（框选时 ${st.crop.viewportW}×${st.crop.viewportH}），裁剪位置可能偏移——建议停止后重新框选`);
+  }
   if (st.urlLog && st.urlLog.length) {
     const last = st.urlLog[st.urlLog.length - 1];
     tips.push(`最近网址变化：${last.u}${last.changed ? "（内容标识变化）" : "（仅进度参数）"}`);

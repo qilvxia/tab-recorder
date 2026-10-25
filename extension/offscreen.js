@@ -10,8 +10,11 @@
   let recStream = null; // 实际进 MediaRecorder 的流：裁剪时=canvas 合成流，否则原 tabCapture 流
   let cropPipe = null; // 裁剪管线 {video, canvasStream, timer}
   let crop = null; // {rect, viewportW, viewportH}（schedule 时从 payload 解析）
-  let cropOut = null; // 实际输出尺寸 {w,h}
+  let cropOut = null; // 实际输出尺寸 {w,h} 与映射参数 {vw,vh,scale,letterbox}
   let cropError = "";
+  let captureSize = null; // 捕获帧尺寸 {w,h}（视频轨 getSettings，无裁剪时也可见）
+  let curViewport = null; // 页面实时视口 {w,h,dpr}（顶层帧上报，变化沿）
+  let viewportDrift = false; // 当前视口与框选快照不一致（裁剪位置可能偏移，面板警告）
   let audioCtx = null;
   let recorder = null;
   let mime = "";
@@ -201,7 +204,7 @@
     const timer = setInterval(draw, Math.max(1000 / fps, 8));
     const canvasStream = canvas.captureStream(fps);
     cropPipe = { video, canvasStream, timer };
-    cropOut = { w: sw, h: sh };
+    cropOut = { w: sw, h: sh, vw, vh, scale, letterbox, viewportW: crop.viewportW, viewportH: crop.viewportH }; // 映射参数入面板：缩放错位时对照两端数字
     return new MediaStream([
       canvasStream.getVideoTracks()[0],
       ...srcStream.getAudioTracks(),
@@ -299,6 +302,10 @@
       audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
       video: { mandatory: videoMandatory },
     });
+    try {
+      const vs = stream.getVideoTracks()[0].getSettings();
+      captureSize = { w: vs.width || 0, h: vs.height || 0 };
+    } catch (e) { captureSize = null; }
 
     // 回环：tabCapture 后原标签页静音，必须把音频接回扬声器才能边录边听。
     // 同时挂 AnalyserNode 实测音量——静默检测的信号源（tab.audible 在部分
@@ -379,6 +386,9 @@
     recStream = null;
     cropOut = null;
     cropError = "";
+    captureSize = null;
+    curViewport = null;
+    viewportDrift = false;
     activeBaseSeg = 0;
     activeBaseTotal = 0;
     state = "countdown";
@@ -524,6 +534,9 @@
       signals: { hasPlayed, playingAgo: lastPlayingTs ? now() - lastPlayingTs : -1 },
       crop: cropOut,
       cropError,
+      captureSize,
+      curViewport,
+      viewportDrift,
       urlLog: urlLog.slice(-2),
       error: startError,
     };
@@ -720,6 +733,12 @@
     }
     if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);
     if (data.url) onUrlChange(data.url);
+    if (data.viewport && data.viewport.w > 0) {
+      curViewport = data.viewport;
+      // 视口漂移检测：与框选时快照不一致 = 裁剪映射基准变了（缩放/窗口调整/
+      // 全屏等），选区位置可能偏移——仅提示不阻断（映射仍按框选快照，行为可预期）
+      if (crop) viewportDrift = !(curViewport.w === crop.viewportW && curViewport.h === crop.viewportH);
+    }
     if (data.playing) {
       // 任一帧有视频在播：刷新"最后在播"时刻（停播静默判定的基准）
       lastPlayingTs = now();
