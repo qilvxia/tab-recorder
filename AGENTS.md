@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-25 · v2.3.2）
+## 当前状态（2026-10-25 · v2.3.3）
 
 - ✅ M0/M1/M2：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -66,7 +66,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.3.1（分片假 ended 根因修复）：路飞播放器**分片播放**——每个媒体分片结束都触发 video ended → 「ended 立即停录保存」把一节课切成 8 段（每分片一段，弹窗未现连播点击"未找到入口"）。修：**ended 挂起，停播 5 秒统一切节**——分片假 ended 后视频 5 秒内恢复播放 → lastPlayingTs 刷新计数重置不切；真播完持续无播放 ≥5s → 停录保存+广播点击弹窗。**时长守卫方案作废**（用户正确指出录制时长 vs 总时长受开录时点/网络/暂停干扰）。video-ended 不再作为切节信号（正常）
 - ⏳ ~~待用户 Chrome 验收 v2.3.1~~ → **用户复验：一个视频仍被分成 N 段**
 - ✅ v2.3.2（**N 段真正根因：playing 上报是变化沿触发，停播判定必然误切**）：content-detect 轮询只在值变化时上报 → 持续播放期间 playing 恒 true **永不雪再上报** → offscreen lastPlayingTs 冻结在开播时刻 → stoppedPlayingCheck 的 5s 闸在开播 5s 后每轮 tick 都满足 → 唯一刷新源是 keepalive 补注入的 forceReport（约 6s 一次）但 6s > 5s 必先误切 → 30s 静默间隔把节奏定为**每约 30 秒误切一段**（3 分钟 ≈ 8 段，与历次复验吻合）。v2.3.1 挂起 ended 后该路径成唯一活跃切段源故"N 段依旧"；e2e 未抓到是因测试页每节仅 8s + `lastPlayingTs > segStartAt` 严格大于恰好挡住节内首查。修：① **playing=true 心跳**——700ms 轮询在播期间每轮上报（5s 闸获 7 倍安全余量；录制期 SW 本被 keepalive 顶活跃，消息量无碍）；② stoppedPlayingCheck 补 `lastSplitInfo={reason:"advance-pause"}`（此前 stopAll 路径不更新面板「上次切节」，真因不可见）；③ 停播切段即广播连播（此前依赖 content ended 事件转发，跨域 iframe 缺失时只剩 45s 兜底）；④ 死代码清理：lastSplitWasIdle（恒 false）及其派生分支（黑屏小段丢弃——between 架构下弹窗期已不录，场景消失）、SEG.silenceCooldownMs（从未使用）
-- ⏳ **待用户 Chrome 验收 v2.3.2**：路飞站分节连播录 3 节以上——每节一个文件、无周期性碎段、弹窗点掉、序号连续命名正确；若仍有异常，面板「上次切节」现在能如实显示 advance-pause（一击定位）
+- ⏳ ~~待用户 Chrome 验收 v2.3.2~~ → **用户复验三个新证据**：①仍 N 段且「上次切节」**全是 url-change**；②一节末尾几十秒+下一节合并成一个文件；③该文件命名为下一节
+- ✅ v2.3.3（三根因修复）：**主根因=路飞站（保利威）播放器的 playing/ended 信号对 content script 不可见（playing 从未上报 → hasPlayed 恒 false → 停播判定整条死路径——v2.3.2 的心跳修复在真实站点从未启用过，e2e 修复成立但真实站点不适用）+ 站点 URL 播放中周期变化（分片/token/进度参数）**。① **URL 切节「课时名未变否决」**：startSegment 快照 segLessonAtStart，URL 稳定切段前 `!segLessonAtStart || currentLesson === segLessonAtStart` → 否决（同课参数/杂音变化；段开始未识别、段内才识别出=识别收敛同样否决）——v2.2.14 删"课时名未变闸"释放了 url-change 周期切段（N 段从 v2.3.0 验收出现的时序完全吻合），现以语义化版本恢复；真换课由 lesson-change 通道（2s 稳定+URL 联动）承担，识别延迟由 onUpdated 立即补注入覆盖；② **修 isSourceUpgrade 误判**：`!!currentLessonSrc && rank > curRank`——切段后 src 清空，空源参与升级判定使下一次上报必误判升级并改写已有段名（合并段命名成下一节的根因）；空源=首次/重识别，只补空名；③ **入口可见型播完停录**（信号缺失站点的播完主通道）：content-detect class 启发式（next/skip/continue 可见元素，close 不进此信号）**变化沿事件化**上报 advanceEntry（独立消息，快照 report 不携带——防 forceReport 全量上报把常驻入口误当弹窗；首轮建基线，注入时常驻可见入口不算新出现，重注入重建基线）→ offscreen 挂起 pendingEntryAt，稳定 3s + 段 ≥2MB → finishSegmentForAdvance("entry-visible") 停录进 between；播放中浮现的贴片「跳过」类误报由 playing 心跳作废挂起；④ **between 30s 超时自动恢复**（入口误报无跳转/加载过慢兜底）；⑤ 面板「播放信号：✓/✗」显示（复验一击定位信号可达性）。三种播完信号并存：停播 5s（playing 型）/入口可见（entry 型）/45s 定时兜底。e2e 探针升级：弹窗按钮补 class="next-section"（对齐路飞 DOM）+ 节内每 15s 变 hash（模拟分片参数）——验证：hash 探针零切段、url-change 切段消失、三文件命名与节号一致（上一轮的时序错位命名消失=isSourceUpgrade 修复直接证据）
+- ⏳ **待用户 Chrome 验收 v2.3.3**：路飞站分节连播录 3 节以上——每节一个文件、节内无碎段、弹窗点掉、文件名与内容一致（末尾不再并入下一节）；面板「播放信号」行可确认该站信号可达性（预期 ✗，播完停录走弹窗入口信号）
 - ⏳ M3 区域裁剪 → M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

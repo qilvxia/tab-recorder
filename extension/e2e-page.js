@@ -58,3 +58,8 @@ document.addEventListener("click", function (e) {
   setTimeout(endLesson, 30000);
 });
 window.__lessonNum = function () { return lessonNum; };
+
+// 节内模拟周期 URL 变化（分片/token/进度参数，15s 一次保证每节内至少一次）：
+// 修复前必触发 url-change 周期切段（一节 N 段的根因），修复后应被
+// 「课时名未变否决」拦住——本探针验证节内零切段。
+setInterval(function () { location.hash = "#t=" + Math.floor(Date.now() / 1000); }, 15000);

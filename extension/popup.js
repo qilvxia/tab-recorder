@@ -211,6 +211,9 @@ function render(st) {
 
   const tips = [];
   if (st.state === "stopping") tips.push("正在保存文件，请勿关闭浏览器…");
+  if (st.signals) {
+    tips.push(`播放信号：${st.signals.hasPlayed ? "✓ 已到达" : "✗ 未收到（停播判定不启用，播完靠弹窗入口信号）"}`);
+  }
   if (st.lastSplit) {
     const d = new Date(st.lastSplit.at);
     const p2 = (v) => String(v).padStart(2, "0");

@@ -35,6 +35,8 @@
     silenceGapMs: 30000, // 两次静默切节的最小间隔（防 audible 抖动）
     minSplitGapMs: 10000, // 全局最小切节间隔：未到间隔时挂起信号保留重试（不丢弃）
     lessonStableMs: 2000, // 课时名同源变化需稳定这么久才切节（滤网络抖动；语义判定见下）
+    entryStableMs: 3000, // 连播入口（播完弹窗）持续可见这么久才停录：滤动画/闪现误报
+    betweenTimeoutMs: 30000, // 节间等待超时：无恢复信号也自动续录（入口误报/加载过慢兜底）
     idleDiscardBytes: 2 * 1024 * 1024, // 节间黑屏小段丢弃阈值（连播点击前弹窗期录到的部分）
     minLessonSplitBytes: 4 * 1024 * 1024, // lesson 切节前提：当前段 ≥ 此量（约 8 秒内容）才值得单独成文件，否则只改名并入后续
   };
@@ -49,6 +51,9 @@
   let pendingLessonAt = 0;
   let lastSilenceSplitAt = 0;
   let segStartAt = 0; // 当前段开始时刻（lesson-change 的 URL 联动确认基准）
+  let segLessonAtStart = ""; // 本段开始时的课时名快照（URL 切节的「课时名未变否决」基准）
+  let pendingEntryAt = 0; // 连播入口（播完弹窗）可见挂起时刻：稳定期满停录进节间
+  let betweenStartAt = 0; // 进入 between 的时刻（超时自动恢复用）
   let lastSplitInfo = null; // {reason, at}——切节原因（面板临时显示，诊断用）
   let lastPlayingTs = 0; // 最近一次"页面有视频在播"的上报时刻
   let hasPlayed = false; // 本场录制是否出现过播放（停播静默判定的启用开关）
@@ -167,6 +172,7 @@
     cur = { seq, name: currentLesson || "", chunks: [], bytes: 0 };
     activeBaseSeg = 0;
     segStartAt = now(); // lesson-change 的 URL 联动确认基准：本段开始后 URL 变过才算真换课
+    segLessonAtStart = currentLesson || ""; // URL 切节「课时名未变否决」的基准（见 checkPendingSplits）
     if (resumeTs === null) resumeTs = now();
     recorder = makeRecorder();
     recorder.start(1000);
@@ -186,6 +192,7 @@
     console.info("[rec] 节间恢复：续录");
     state = "recording";
     currentLesson = ""; // 重置：等新节识别补写段名（between 期 detector 可能已上报新节名）
+    betweenStartAt = 0;
     resumeTs = now();
     startSegment();
     updateBadge();
@@ -275,6 +282,9 @@
     pendingLessonAt = 0;
     lastSilenceSplitAt = 0;
     segStartAt = 0;
+    segLessonAtStart = "";
+    pendingEntryAt = 0;
+    betweenStartAt = 0;
     lastSplitInfo = null;
     lastPlayingTs = 0;
     hasPlayed = false;
@@ -386,6 +396,7 @@
       // 与音频回环保留——恢复时直接在同流上开新 recorder（零丢帧，无二次捕获风险）
       pauseAfterStop = false;
       state = "between";
+      betweenStartAt = now();
       hasPlayed = false; // 恢复后重新从 playing 上报收敛
       lastAdvanceBroadcast = now();
       updateBadge();
@@ -418,6 +429,7 @@
       bytes,
       segCount: segmentsDone.length,
       lastSplit: lastSplitInfo,
+      signals: { hasPlayed, playingAgo: lastPlayingTs ? now() - lastPlayingTs : -1 },
       error: startError,
     };
   }
@@ -487,6 +499,11 @@
       if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
         pendingUrl = "";
         resumeCapture();
+      } else if (betweenStartAt && now() - betweenStartAt >= SEG.betweenTimeoutMs) {
+        // 超时兜底：入口误报进 between 但无跳转（浮层点不掉）、或新页加载过慢——
+        // 直接续录本流。宁可录进当前段也不无限空等（段名未识别时 URL 前置挡误切）
+        console.info("[rec] 节间等待超时，自动恢复续录");
+        resumeCapture();
       }
       return;
     }
@@ -495,6 +512,15 @@
       // 前置：课时名/段名未识别时 URL 变化一律不切段（切了也无法正确命名；识别到位后段名自然补写）。
       // 开录后点播放常使播放器给 URL 加参数——这条前置拦住由此产生的开录碎片段
       if (!currentLesson || !cur || !cur.name) {
+        pendingUrl = "";
+        return;
+      }
+      // 课时名语义否决（N 段根因修复）：本段开始时已识别且至今同名，或段开始时
+      // 未识别、段内才识别出——都是"同课的 URL 参数/杂音变化"（分片 token、进度、
+      // 播放器 iframe 轮询），不切。真换课由 lesson-change 通道完成（识别收敛后
+      // 2s 稳定 + URL 联动确认）；URL 切节只在课时名于本段内真变过时兜底。
+      if (!segLessonAtStart || currentLesson === segLessonAtStart) {
+        console.info("[rec] url-change 否决（本段课时名未变）:", currentLesson);
         pendingUrl = "";
         return;
       }
@@ -536,7 +562,10 @@
           // 来源降级（如播完弹窗期媒体元数据被清、跌到页面标题）：忽略，保持原值
           return;
         }
-        const isSourceUpgrade = currentLesson && rank > curRank;
+        // 来源升级仅限「识别源非空且优先级更高」。切段后 src 被清空，若空源也算
+        // 升级，下一节首个上报就会误判升级并改写已有段名——合并段被命名成下一节
+        // 的根因。空源 = 首次识别/重识别：只补空段名，不动已有段名。
+        const isSourceUpgrade = !!currentLessonSrc && rank > curRank;
         currentLesson = name;
         currentLessonSrc = src;
         if (state === "recording" && mode === "segment") {
@@ -558,7 +587,14 @@
       lastPlayingTs = now();
       hasPlayed = true;
       silenceSplitFired = false;
+      pendingEntryAt = 0; // 播放恢复：入口可见信号作废（播放中浮现的贴片「跳过」类误报）
       if (state === "between") resumeCapture(); // 播放恢复：立即续录（不等 URL 稳定）
+    }
+    if (data.advanceEntry) {
+      // 连播入口（播完弹窗类）新出现：挂起待稳定确认。这是 playing/ended 信号
+      // 不可见站点（保利威类加密播放器，video 对查询不可见）唯一的播完证据——
+      // 播完弹窗出现即停录保存，末尾不再空录到连播点击跳转。
+      if (state === "recording" && mode === "segment") pendingEntryAt = now();
     }
     if (data.ended) {
       // 播完信号挂起：不立即停录——加密播放器（分片播放）的每个分片结束都会触发
@@ -588,6 +624,19 @@
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
   }
 
+  // 播完类停录公共尾（停播确认/入口可见共用）：更新面板原因 + 立即广播连播 + 停录进节间
+  function finishSegmentForAdvance(reason) {
+    lastSplitInfo = { reason, at: now() }; // 面板「上次切节」可见（stopAll 路径此前不更新，真因不可见）
+    // 立即广播连播：停录 = 内容播完 = 弹窗正在出现。此前依赖 content 的 ended
+    // 事件转发广播，跨域 iframe 信号缺失时只剩 45s 兜底，点击弹窗太慢。
+    if (settings.autoNext !== false) {
+      lastAdvanceBroadcast = now();
+      chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
+    }
+    // 停录保存当前节并进入节间等待（弹窗期不录制，跳转成功自动续录）
+    stopAll("advance-pause", true);
+  }
+
   // 停播静默：页面侧上报的"视频在播"信号（playing）消失 ≥5 秒 → 视为换节间隙。
   // 语义比音频/audible 更准：切节的本意就是"内容播完了"。曾播过（hasPlayed）才启用，
   // 开录初期未点播放时不会误切。
@@ -599,21 +648,27 @@
     if (silenceSplitFired || now() - lastSilenceSplitAt < SEG.silenceGapMs) return;
     silenceSplitFired = true;
     lastSilenceSplitAt = now();
-    lastSplitInfo = { reason: "advance-pause", at: now() }; // 面板「上次切节」可见（此前 stopAll 路径不更新，复验看不到真因）
-    // 切段即广播连播：停播确认 = 内容播完 = 弹窗正在出现。此前依赖 content 的
-    // ended 事件转发广播，跨域 iframe 信号缺失时只剩 45s 兜底，点击弹窗太慢。
-    if (settings.autoNext !== false) {
-      lastAdvanceBroadcast = now();
-      chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
-    }
-    // 停播 5 秒确认 → 结束当前节并进入节间等待（弹窗期不录制，跳转成功自动续录）
-    stopAll("advance-pause", true);
+    finishSegmentForAdvance("advance-pause");
+  }
+
+  // 连播入口可见确认：播完弹窗类入口持续可见 → 内容已播完 → 停录进节间。
+  // playing/ended 信号不可见站点（保利威类）的播完判定主通道；信号可达站点
+  // 上 stopPlayingCheck 通常更快触发，两条路径先到先得，重复触发有状态锁互斥。
+  function entryVisibleCheck() {
+    if (state !== "recording" || mode !== "segment") return;
+    if (!pendingEntryAt) return;
+    if (now() - pendingEntryAt < SEG.entryStableMs) return;
+    pendingEntryAt = 0;
+    if (cur && cur.bytes < SEG.idleDiscardBytes) return; // 段无实质内容（开录初期常驻元素首报）不停录
+    console.info("[rec] 连播入口持续可见 → 停录进节间");
+    finishSegmentForAdvance("entry-visible");
   }
 
   function tick() {
     updateBadge();
     if (state === "stopping") { maybeFinish(); return; }
     stoppedPlayingCheck();
+    entryVisibleCheck();
     checkPendingSplits();
     // 连播定时兜底：播放器信号（ended/playing 上报）可能因跨域 iframe 全部缺失，
     // 分节模式下每 45 秒广播一次连播指令，保证弹窗类入口最迟一分钟内被点掉

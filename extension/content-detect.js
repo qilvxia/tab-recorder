@@ -11,7 +11,7 @@
   window.__tabRecDetector = true;
 
   let cfg = { lessonSelector: "h1", courseSelector: "", autoNext: false };
-  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false };
+  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false };
   const seenVideos = new Set();
 
   // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
@@ -330,6 +330,18 @@
     return false;
   }
 
+  // 连播入口可见性（播完弹窗类信号，offscreen 用于"播完即停录"）：class 启发式
+  // 轻量查询，词表扫描留给点击层。只认 next/skip/continue——close 类在播放中
+  // 会误命中（关闭按钮），不进此信号。播放中的贴片「跳过」类误报由 playing
+  // 心跳在 offscreen 端作废挂起。变化沿上报：常驻目录项不产生新事件。
+  function nextEntryVisible() {
+    const els = document.querySelectorAll('[class*="next"],[class*="skip"],[class*="continue"]');
+    for (const el of els) {
+      if (visible(el)) return true;
+    }
+    return false;
+  }
+
   chrome.runtime.onMessage.addListener((m) => {
     if (m && m.type === "detect-config") {
       cfg = m.cfg || cfg;
@@ -343,6 +355,11 @@
   });
 
   let forceReport = false;
+  // 连播入口可见性：变化沿事件化——只有「此前不可见 → 现在可见」才发独立消息
+  //（data:{advanceEntry:true}）。首轮建立基线：注入时常驻可见的入口（播放器控制栏
+  // 「下一集」按钮等）不算新出现；detector 重注入后重建基线，iframe 重载同理。
+  // 快照 report 不携带该状态——forceReport 全量上报会把常驻入口误当弹窗新出现。
+  let entryBaselineSet = false;
 
   setInterval(() => {
     trackVideos();
@@ -350,6 +367,15 @@
     const course = pick(cfg.courseSelector);
     const url = location.href;
     const playing = anyPlaying();
+    const entryVisible = nextEntryVisible();
+    if (!entryBaselineSet) {
+      entryBaselineSet = true;
+    } else if (entryVisible && !last.entryVisible) {
+      try {
+        chrome.runtime.sendMessage({ type: "content-report", data: { advanceEntry: true } });
+      } catch (e) { /* 扩展上下文失效时静默 */ }
+    }
+    last.entryVisible = entryVisible;
     if (forceReport || playing !== last.playing || name !== last.lesson || course !== last.course || url !== last.url) {
       forceReport = false;
       last.lesson = name;
