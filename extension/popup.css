@@ -46,6 +46,17 @@ input:focus { outline: 2px solid #bcd3ff; border-color: var(--brand); }
 }
 .modeBtn.active { border-color: var(--brand); color: var(--brand); background: #eef4ff; font-weight: 600; }
 
+.chips { display: flex; gap: 6px; flex-wrap: wrap; }
+.chipBtn {
+  padding: 3px 10px; font-size: 12px; cursor: pointer;
+  border: 1px solid var(--line); border-radius: 999px; background: var(--card); color: var(--sub);
+}
+.chipBtn:hover { border-color: var(--brand); color: var(--brand); }
+.cropLabel {
+  font-size: 12px; color: var(--sub); align-self: center; padding: 0 2px;
+  max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+
 .hint { font-size: 12px; color: var(--sub); margin: 4px 0 8px; }
 button.primary {
   width: 100%; padding: 10px 0; font: inherit; font-weight: 600; cursor: pointer;

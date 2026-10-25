@@ -119,6 +119,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             });
           });
           await injectDetector(msg.tabId, msg.settings, msg.mode);
+          // 兜底关闭可能遗留的选区浮层，避免浮层被录进画面（真正取流前的最后时刻）
+          chrome.tabs.sendMessage(msg.tabId, { type: "crop-selector-cancel" }).catch(() => {});
           sendResponse({ ok: true, streamId });
         } catch (e) {
           sendResponse({ ok: false, error: String(e && e.message || e) });
@@ -169,6 +171,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           chrome.tabs.sendMessage(st.tabId, { type: "try-advance" }).catch(() => {});
         }
         sendResponse({ ok: true });
+        break;
+      }
+      case "select-crop-region": {
+        // popup 请求在目标标签页弹出具选浮层（复用 scripting 权限，按需注入）
+        try {
+          await chrome.scripting.executeScript({ target: { tabId: msg.tabId }, files: ["content-crop.js"] });
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
+        break;
+      }
+      case "crop-region-selected": {
+        // 来自选区浮层：视口坐标存会话存储并绑定标签页（换 tab 失效，跨录制保留）
+        try {
+          await chrome.storage.session.set({
+            cropRegion: {
+              rect: msg.rect,
+              viewportW: msg.viewportW,
+              viewportH: msg.viewportH,
+              tabId: sender.tab && sender.tab.id,
+              at: Date.now(),
+            },
+          });
+          sendResponse({ ok: true });
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e && e.message || e) });
+        }
         break;
       }
       case "advance-clicked": {

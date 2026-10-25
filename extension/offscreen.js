@@ -7,6 +7,11 @@
   let settings = {};
   let payload = {};
   let stream = null;
+  let recStream = null; // 实际进 MediaRecorder 的流：裁剪时=canvas 合成流，否则原 tabCapture 流
+  let cropPipe = null; // 裁剪管线 {video, canvasStream, timer}
+  let crop = null; // {rect, viewportW, viewportH}（schedule 时从 payload 解析）
+  let cropOut = null; // 实际输出尺寸 {w,h}
+  let cropError = "";
   let audioCtx = null;
   let recorder = null;
   let mime = "";
@@ -152,8 +157,66 @@
   const segActiveMs = () => activeBaseSeg + (resumeTs ? now() - resumeTs : 0);
   const totalActiveMs = () => activeBaseTotal + (resumeTs ? now() - resumeTs : 0);
 
+  // 区域裁剪：tab 视频轨 → video → canvas（定时 drawImage 裁剪）→ captureStream
+  // offscreen 文档不可见，requestAnimationFrame 不运行，因此用 setInterval 按目标帧率绘制。
+  async function buildCropStream(srcStream) {
+    const fps = Number(settings.frameRate) > 0 ? Number(settings.frameRate) : 30;
+    const video = document.createElement("video");
+    video.muted = true;
+    video.playsInline = true;
+    video.srcObject = new MediaStream(srcStream.getVideoTracks());
+    await video.play().catch(() => {});
+    if (!video.videoWidth) {
+      await new Promise((resolve, reject) => {
+        const to = setTimeout(() => reject(new Error("视频流迟迟无画面")), 5000);
+        video.onloadedmetadata = () => { clearTimeout(to); resolve(); };
+      });
+    }
+    const vw = video.videoWidth, vh = video.videoHeight;
+    // 实测定律（diag_crop.py）：tabCapture 帧按 视口宽 统一缩放；当帧纵横比与视口
+    // 不一致时垂直居中、上下补黑边（letterbox）。无黑边时 offset 自然为 0。
+    const scale = crop.viewportW > 0 ? vw / crop.viewportW : 1;
+    const letterbox = Math.max(0, (vh - crop.viewportH * scale) / 2);
+    const r = crop.rect;
+    const sx = Math.min(Math.max(0, Math.floor(r.x * scale)), vw - 2);
+    const sy = Math.min(Math.max(0, Math.floor(r.y * scale + letterbox)), vh - 2);
+    let sw = Math.min(vw - sx, Math.floor(r.w * scale));
+    let sh = Math.min(vh - sy, Math.floor(r.h * scale));
+    sw -= sw % 2; sh -= sh % 2; // H.264 yuv420 要求偶数尺寸
+    if (sw < 16 || sh < 16) throw new Error("裁剪区域换算后过小");
+
+    const canvas = document.createElement("canvas");
+    canvas.width = sw;
+    canvas.height = sh;
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.fillStyle = "#000";
+    ctx.fillRect(0, 0, sw, sh);
+    const draw = () => {
+      if (!cropPipe) return;
+      try {
+        if (video.readyState >= 2) ctx.drawImage(video, sx, sy, sw, sh, 0, 0, sw, sh);
+      } catch (e) { /* 单帧失败忽略 */ }
+    };
+    const timer = setInterval(draw, Math.max(1000 / fps, 8));
+    const canvasStream = canvas.captureStream(fps);
+    cropPipe = { video, canvasStream, timer };
+    cropOut = { w: sw, h: sh };
+    return new MediaStream([
+      canvasStream.getVideoTracks()[0],
+      ...srcStream.getAudioTracks(),
+    ]);
+  }
+
+  function destroyCropPipe() {
+    if (!cropPipe) return;
+    try { clearInterval(cropPipe.timer); } catch (e) {}
+    try { cropPipe.canvasStream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+    try { cropPipe.video.srcObject = null; } catch (e) {}
+    cropPipe = null;
+  }
+
   function makeRecorder() {
-    const r = new MediaRecorder(stream, {
+    const r = new MediaRecorder(recStream, {
       mimeType: mime,
       videoBitsPerSecond: Number(settings.videoBitrate) || 4000000,
       audioBitsPerSecond: Number(settings.audioBitrate) || 128000,
@@ -253,6 +316,18 @@
       chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
       return;
     }
+    // 区域裁剪：构建 canvas 合成流（失败自动降级全画面，不阻塞录制）
+    recStream = stream;
+    if (crop) {
+      try {
+        recStream = await buildCropStream(stream);
+      } catch (e) {
+        cropError = String(e && e.message || e);
+        crop = null;
+        recStream = stream;
+        console.warn("[rec] 裁剪降级全画面:", cropError);
+      }
+    }
     state = "recording";
     beginRecording();
   }
@@ -266,6 +341,7 @@
     pendingTabId = msg.tabId;
     mode = payload.mode === "segment" ? "segment" : "single";
     courseFolder = sanitize(payload.courseFolder || "", 40);
+    crop = payload.crop && payload.crop.rect ? payload.crop : null;
 
     mime = pickMime(settings.format === "webm" ? "webm" : "mp4");
     ext = mime.startsWith("video/mp4") ? "mp4" : "webm";
@@ -297,6 +373,9 @@
     silenceSplitFired = false;
     captureRequested = false;
     startError = "";
+    recStream = null;
+    cropOut = null;
+    cropError = "";
     activeBaseSeg = 0;
     activeBaseTotal = 0;
     state = "countdown";
@@ -423,6 +502,7 @@
   }
 
   function destroyExtra() {
+    destroyCropPipe();
     try { audioCtx && audioCtx.close(); } catch (e) {}
     try { stream && stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
   }
@@ -439,6 +519,8 @@
       segCount: segmentsDone.length,
       lastSplit: lastSplitInfo,
       signals: { hasPlayed, playingAgo: lastPlayingTs ? now() - lastPlayingTs : -1 },
+      crop: cropOut,
+      cropError,
       error: startError,
     };
   }

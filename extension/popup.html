@@ -26,6 +26,15 @@
     </div>
 
     <div class="row">
+      <label>录制区域</label>
+      <div class="chips">
+        <span id="cropLabel" class="cropLabel">全画面</span>
+        <button class="chipBtn" id="cropPickBtn">框选区域…</button>
+        <button class="chipBtn hidden" id="cropClearBtn">清除</button>
+      </div>
+    </div>
+
+    <div class="row">
       <label>延时开始（秒，0 = 立即开始）</label>
       <input id="startDelay" type="number" min="0" max="60" step="1" value="0">
     </div>

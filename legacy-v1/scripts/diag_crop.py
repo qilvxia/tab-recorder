@@ -77,20 +77,33 @@ def grant_via_hotkey(proc, swc):
         capture_output=True, text=True).stdout.strip() or "0")
     assert hwnd, "未找到 Edge 主窗口句柄"
     u32 = ctypes.windll.user32
-    for _ in range(3):
-        u32.keybd_event(0x12, 0, 0, 0)
-        u32.SetForegroundWindow(hwnd)
-        u32.keybd_event(0x12, 0, 2, 0)
-        time.sleep(0.3)
-        if u32.GetForegroundWindow() == hwnd:
-            break
-        time.sleep(0.5)
-    assert u32.GetForegroundWindow() == hwnd, "Edge 未能置前台"
-    subprocess.run(["powershell", "-NoProfile", "-Command",
-                    "Add-Type -AssemblyName System.Windows.Forms; "
-                    "[System.Windows.Forms.SendKeys]::SendWait('^+y')"],
-                   capture_output=True, text=True)
-    time.sleep(1)
+    for attempt in range(5):
+        for _ in range(3):
+            u32.keybd_event(0x12, 0, 0, 0)
+            u32.SetForegroundWindow(hwnd)
+            u32.keybd_event(0x12, 0, 2, 0)
+            time.sleep(0.3)
+            if u32.GetForegroundWindow() == hwnd:
+                break
+            time.sleep(0.5)
+        subprocess.run(["powershell", "-NoProfile", "-Command",
+                        "Add-Type -AssemblyName System.Windows.Forms; "
+                        "[System.Windows.Forms.SendKeys]::SendWait('^+y')"],
+                       capture_output=True, text=True)
+        time.sleep(1)
+        try:
+            # 授予成功的判据：扩展 action 弹窗打开（activeTab 已授予）
+            n = swc.eval("chrome.runtime.getContexts({contextTypes:['POPUP']}).then(c=>c.length)", await_promise=True)
+            if n:
+                time.sleep(0.5)
+                subprocess.run(["powershell", "-NoProfile", "-Command",
+                                "Add-Type -AssemblyName System.Windows.Forms; "
+                                "[System.Windows.Forms.SendKeys]::SendWait('{ESC}')"],
+                               capture_output=True, text=True)
+                return
+        except Exception:
+            pass
+    raise RuntimeError("无法授予 activeTab（Edge 未能置前台）")
 
 
 # 消费 tab 流并录制（crop 数学与 extension/offscreen.js buildCropStream 完全一致）

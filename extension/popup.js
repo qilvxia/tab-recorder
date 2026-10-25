@@ -71,6 +71,16 @@ async function init() {
   };
 
   $("startBtn").onclick = startRecording;
+  $("cropPickBtn").onclick = pickCropRegion;
+  $("cropClearBtn").onclick = async () => {
+    await chrome.storage.session.remove("cropRegion").catch(() => {});
+    refreshCropRow();
+  };
+  // 选区浮层确认后（popup 可能仍开着）实时刷新状态
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (area === "session" && changes.cropRegion) refreshCropRow();
+  });
+  refreshCropRow();
   $("stopBtn").onclick = async () => {
     $("stopBtn").disabled = true;
     await chrome.runtime.sendMessage({ type: "stop" }).catch(() => {});
@@ -91,6 +101,33 @@ function setMode(m) {
   $("courseRow").classList.toggle("hidden", m !== "segment");
 }
 
+// ---- 录制区域（会话级：绑定标签页，跨录制保留；换 tab 失效） ----
+async function getCropRegion() {
+  const st = await chrome.storage.session.get("cropRegion").catch(() => ({}));
+  const cr = st.cropRegion;
+  return cr && cr.rect && cr.tabId === (tabInfo && tabInfo.id) ? cr : null;
+}
+
+async function refreshCropRow() {
+  const cr = await getCropRegion();
+  $("cropLabel").textContent = cr ? `已选 ${cr.rect.w}×${cr.rect.h} px` : "全画面";
+  $("cropClearBtn").classList.toggle("hidden", !cr);
+}
+
+async function pickCropRegion() {
+  if (!tabInfo || tabInfo.id == null) return;
+  if (tabInfo.url && /^(chrome|edge|about|chrome-extension):/i.test(tabInfo.url)) {
+    showErr("浏览器内置页面（chrome:// 等）无法注入选区浮层。");
+    return;
+  }
+  const resp = await chrome.runtime.sendMessage({ type: "select-crop-region", tabId: tabInfo.id })
+    .catch((e) => ({ ok: false, error: String(e) }));
+  if (!resp || !resp.ok) {
+    showErr("无法注入选区浮层：" + ((resp && resp.error) || "未知错误"));
+  }
+  // 注入成功后用户会点击页面画框，popup 失焦关闭属正常
+}
+
 async function startRecording() {
   if (!tabInfo || tabInfo.id == null) return;
   if (tabInfo.url && /^(chrome|edge|about|chrome-extension):/i.test(tabInfo.url)) {
@@ -105,6 +142,8 @@ async function startRecording() {
     tabTitle: tabInfo.title,
     tabUrl: tabInfo.url,
   };
+  const cr = await getCropRegion();
+  if (cr) payload.crop = { rect: cr.rect, viewportW: cr.viewportW, viewportH: cr.viewportH };
   $("startBtn").disabled = true;
   $("startBtn").textContent = "正在启动…";
   const resp = await chrome.runtime.sendMessage({ type: "start", tabId: tabInfo.id, settings, payload }).catch((e) => ({ ok: false, error: String(e) }));
@@ -211,6 +250,8 @@ function render(st) {
 
   const tips = [];
   if (st.state === "stopping") tips.push("正在保存文件，请勿关闭浏览器…");
+  if (st.crop) tips.push(`仅录制所选区域（${st.crop.w}×${st.crop.h}）。`);
+  if (st.cropError) tips.push("区域裁剪启动失败，已按全画面录制：" + st.cropError);
   if (st.signals) {
     tips.push(`播放信号：${st.signals.hasPlayed ? "✓ 已到达" : "✗ 未收到（停播判定不启用，播完靠弹窗入口信号）"}`);
   }
