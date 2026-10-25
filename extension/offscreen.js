@@ -596,6 +596,10 @@
       // 播完弹窗出现即停录保存，末尾不再空录到连播点击跳转。
       if (state === "recording" && mode === "segment") pendingEntryAt = now();
     }
+    if (data.advanceExit) {
+      // 弹窗入口消失反沿：手动点掉弹窗（无点击回报）时也要立即续录
+      if (state === "between") resumeCapture();
+    }
     if (data.ended) {
       // 播完信号挂起：不立即停录——加密播放器（分片播放）的每个分片结束都会触发
       // ended，直接停录会把一节课切成碎片段。统一交给停播判定：视频 5 秒内恢复
@@ -699,6 +703,11 @@
         sendResponse({ ok: true });
         break;
       case "offscreen-audible": onAudible(!!msg.audible); sendResponse({ ok: true }); break;
+      case "offscreen-advance-clicked":
+        // 连播点击成功：立即从 between 续录（新节内容零丢失，早于 URL 稳定 3s 兜底）
+        if (state === "between") resumeCapture();
+        sendResponse({ ok: true });
+        break;
       case "offscreen-tab-closed": sendResponse(stopAll("tab-closed")); break;
       case "anchor-landed": {
         pendingAnchors.delete(msg.name);

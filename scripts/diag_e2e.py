@@ -196,9 +196,9 @@ def main():
                 print("[%02ds] 采样异常: %s" % ((i + 1) * 2, str(e)[:120]))
 
         final_files = sw.eval(
-            "chrome.downloads.search({}).then(l=>JSON.stringify(l.filter(x=>x.filename.includes('e2e')).map(x=>({n:x.filename.split('\\\\').pop(), s:x.state}))))",
+            "chrome.downloads.search({}).then(l=>JSON.stringify(l.filter(x=>x.filename.includes('e2e')).map(x=>({n:x.filename.split('\\\\').pop(), s:x.state, b:x.fileSize}))))",
             await_promise=True)
-        print("最终落盘:", final_files)
+        print("最终落盘(含字节量，三节应接近≈30s×码率):", final_files)
     finally:
         proc.kill()
 

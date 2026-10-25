@@ -171,6 +171,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse({ ok: true });
         break;
       }
+      case "advance-clicked": {
+        // 连播点击成功 → offscreen 从 between 立即续录（新节内容零丢失）
+        chrome.runtime.sendMessage({ type: "offscreen-advance-clicked" }).catch(() => {});
+        sendResponse({ ok: true });
+        break;
+      }
       case "advance-result": {
         // 连播尝试结果存会话（站点有 console.clear 反调试，控制台日志不可靠，面板直接显示）
         try {

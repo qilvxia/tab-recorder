@@ -150,6 +150,9 @@
       advTimers = [];
       lastClickAt = Date.now();
       chrome.storage.session.set({ lastAdvanceClick: Date.now() }).catch(() => {});
+      // 点击成功即时回报：offscreen 收到后从 between 立即续录（早于页面导航），
+      // 新节内容零丢失——否则恢复要等 URL 稳定 3s，新节自动开播的头几秒会漏录
+      try { chrome.runtime.sendMessage({ type: "advance-clicked" }); } catch (e) {}
       logAdvance("自动连播：已点击 " + how);
     } else {
       logAdvance("自动连播：本帧未找到下一节入口");
@@ -373,6 +376,13 @@
     } else if (entryVisible && !last.entryVisible) {
       try {
         chrome.runtime.sendMessage({ type: "content-report", data: { advanceEntry: true } });
+      } catch (e) { /* 扩展上下文失效时静默 */ }
+    } else if (!entryVisible && last.entryVisible) {
+      // 入口消失反沿：弹窗被点掉（自动连播或用户手动）→ offscreen between 态
+      // 立即续录，覆盖无点击回报的手动场景；误消失（控制栏淡出）后果是提前
+      // 恢复录旧页静止至跳转，本就待恢复，无害
+      try {
+        chrome.runtime.sendMessage({ type: "content-report", data: { advanceExit: true } });
       } catch (e) { /* 扩展上下文失效时静默 */ }
     }
     last.entryVisible = entryVisible;
