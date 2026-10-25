@@ -258,6 +258,10 @@ function render(st) {
   if (st.state === "stopping") tips.push("正在保存文件，请勿关闭浏览器…");
   if (st.crop) tips.push(`仅录制所选区域（${st.crop.w}×${st.crop.h}）。`);
   if (st.cropError) tips.push("区域裁剪启动失败，已按全画面录制：" + st.cropError);
+  if (st.urlLog && st.urlLog.length) {
+    const last = st.urlLog[st.urlLog.length - 1];
+    tips.push(`最近网址变化：${last.u}${last.changed ? "（内容标识变化）" : "（仅进度参数）"}`);
+  }
   if (st.signals) {
     tips.push(`播放信号：${st.signals.hasPlayed ? "✓ 已到达" : "✗ 未收到（停播判定不启用，播完靠弹窗入口信号）"}`);
   }

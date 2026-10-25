@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-26 · v2.4.6）
+## 当前状态（2026-10-26 · v2.4.7）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -87,7 +87,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.4.5（**旧实例停摆加固** + 文案重写）：报错根因——扩展重载后旧检测脚本的**定时器还在跑**（连播九轮尝试的 setTimeout），attemptAdvance 里 `chrome.storage.session.get(...)` 在调用本身**同步抛**（`then().catch()` 只兜 Promise 链内部错误，兜不住同步抛错）→ 冒成 Uncaught。v2.4.2 守卫加固解决了"新注入被挡"，旧实例定时器仍存活报错。修：① **attemptAdvance 的 storage get 包 try/catch**——同步抛错（上下文失效）时清空全部连播定时器并 return（**彻底停摆而非降级**：旧实例仍能操作页面 DOM，降级点击会真的跳课；新实例已由守卫 token 重建接管）；Promise 内失败（session 未开放）维持原降级 doClick 语义；② 700ms 轮询入口加上下文存活自检（chrome.runtime.getURL try/catch）——失效即 clearInterval 自停；③ 文案：URL 模式勾选改为「网址一变就切下一节（B 站多 P 等同页换集的网站勾选；不勾 = 按页面课时名智能切节）」。验证：语法/smoke PASS、e2e 回归零变化
 - ⏳ ~~待用户 Chrome 复验 v2.4.5~~ → **用户测 YouTube（勾选 URL 模式）：全是 ~10s 碎片视频**（面板证据：识别正常=媒体元数据已出歌名、20 节/3.5 分钟、切节原因全 url-change）
 - ✅ v2.4.6（**URL 指纹规范化**——进度参数剥除，修 YouTube 10s 碎片）：根因——**YouTube 播放中每 ~10s history.replaceState 更新 `&t=` 进度参数**，勾选的「网址一变就切」把每次进度更新当换集信号，10s 全局节流与 t 更新周期同频，每次恰好过闸 → 10s 碎片。B 站 p（换集才变）与 YouTube t（持续变）的 URL 变化模式不同，「网址一变就切」须先剥进度再比较。修（URL 信号单点收口）：**urlFingerprint** = 剥进度类参数（t/t2/time/start/progress/at/ts/timestamp）+ hash 后的 origin+pathname+search；onUrlChange 指纹未变 → 只更新 lastUrl 不进切节挂起；指纹变 → 正常挂起（即刻切/稳定期）。schedule 初始化 lastUrlFp。副作用修正：t 类变化不再污染 lastUrlChangeAt——lesson-change 的 URL 联动判定更准。各场景：YouTube URL 模式 t 忽略/v 即刻切 ✓、智能模式 mediasession→lesson-change ✓（面板已证识别正常）、B 站 p 保留不变 ✓、e2e hash 探针被剥 ✓。node 单测四场景全过（t 变同指纹/v 变异指纹/p 变异指纹/hash 变同指纹）。验证：语法/smoke PASS、e2e 回归零变化
-- ⏳ **待用户 Chrome 复验 v2.4.6**：YouTube 重录——勾选 URL 模式每视频一个文件（v 参数变化切节）；也可试不勾选（智能模式，mediasession 驱动 lesson-change，应等价）；B 站/路飞常规复录确认不受影响
+- ⏳ ~~待用户 Chrome 复验 v2.4.6~~ → **用户复验：YouTube 仍 ~10s 一个视频**——指纹剥除基于「&t= 记进度」的既有认知（2023-2024），真实变化模式与假设不符
+- ✅ v2.4.7（**URL 变化观测面**——拿真实 URL 流定位，停止盲猜参数名）：① offscreen `urlLog`（最近 5 条）：onUrlChange **每次调用**（含被指纹忽略的）记录 `{u: 原样URL截断120字符, changed: 指纹是否判定为内容变化, at}`；status 返回最近 2 条；schedule 清空；② popup 录制中 tips 显示「最近网址变化：<URL>（内容标识变化 | 仅进度参数）」——changed 标志直接回答指纹判定认不认为它是换内容：显示「内容标识变化」却仍同视频 → 剥除名单缺参数（URL 样本到手即补）；显示「仅进度参数」却仍被切 → 切节路径另有其人（结合「上次切节」定位）。验证：语法/smoke PASS、e2e 回归零变化
+- ⏳ **待用户复验 v2.4.7（观测轮）**：YouTube 重录至出现碎片后**展开面板**——把「最近网址变化」完整内容 + 「上次切节」原因一起发我，两信息足够一击定位
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

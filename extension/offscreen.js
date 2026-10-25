@@ -356,6 +356,7 @@
     currentLessonSrc = "";
     lastUrl = payload.tabUrl || "";
     lastUrlFp = urlFingerprint(lastUrl);
+    urlLog = [];
     pendingUrl = "";
     lastUrlChangeAt = 0;
     pendingLesson = "";
@@ -523,6 +524,7 @@
       signals: { hasPlayed, playingAgo: lastPlayingTs ? now() - lastPlayingTs : -1 },
       crop: cropOut,
       cropError,
+      urlLog: urlLog.slice(-2),
       error: startError,
     };
   }
@@ -592,10 +594,17 @@
     } catch (e) { return url; }
   }
 
+  // URL 变化观测日志：记录每次变化的原样 URL 与指纹判定结果——「网址一变就切」
+  // 的剥除名单基于假设（YouTube 用 &t= 记进度），真实变化模式以观测为准
+  let urlLog = []; // 最近 5 条 {u, changed, at}
+
   function onUrlChange(url) {
     if (!url || url === lastUrl) return;
     const fp = urlFingerprint(url);
-    if (fp === lastUrlFp) {
+    const changed = fp !== lastUrlFp;
+    urlLog.push({ u: String(url).slice(0, 120), changed, at: now() });
+    if (urlLog.length > 5) urlLog.shift();
+    if (!changed) {
       lastUrl = url; // 记录原样 URL（后续比较用），但指纹未变 = 进度/hash 更新，非内容切换
       return;
     }
