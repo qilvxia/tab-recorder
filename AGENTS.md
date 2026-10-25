@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-26 · v2.5.0）
+## 当前状态（2026-10-26 · v2.5.1）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -95,7 +95,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.4.9（**捕获帧/视口观测面**——缩放错位用数字定位，不改变任何行为）：三站共用同一套映射数学（diag_crop 验收），偏移根源=scale 两端之一失真（候选：YouTube 站点缩放记忆/多屏 DPI/捕获帧与视口关系异常），数字当前不可见。① content-detect 顶层帧上报实时视口 `{w: innerWidth, h: innerHeight, dpr}`（变化沿 + forceReport 携带，与 url 同顶层判定）；② offscreen：cropOut 扩展 `{w,h,vw,vh,scale,letterbox,viewportW,viewportH}`（映射参数入面板）、beginCapture 读视频轨 getSettings 存 captureSize（无裁剪也可见）、curViewport 落地 + **viewportDrift 检测**（当前视口 ≠ 框选快照 → 面板警告「建议重新框选」，仅提示不阻断——v2.4.0 决策暂缓的漂移检测，YouTube 场景令其变成实际需求）；③ popup 录制中显示「捕获帧 W×H，当前视口 W×H·dpr N」+ 漂移警告。**判读表**（复验对照）：帧宽/视口宽≈dpr → 定律成立；≠dpr 且偏差固定 → 捕获缩放异常；快照≠当前视口 → 框选后基准变了；帧高−视口高×scale → 黑边量对照偏移方向。**对照实验**：Ctrl+0 重置缩放重录、确认同显示器（多屏 DPI）、框参照物看偏移方向。验证：语法/smoke PASS、e2e 回归零变化
 - ⏳ ~~待用户复验 v2.4.9（观测轮）~~ → **用户面板数字实锤：捕获帧 2240×1400（getSettings）、当前视口 1458×898·dpr1.5、无漂移警告（框选=录制视口）、仅录制所选区域 1550×876（输出像素非选区 css）**——判读：2240÷1458=1.5365、1400÷898=1.559 非等比≠dpr；2240×1400 恰为 150% 缩放下整屏逻辑尺寸而窗口视口仅 1458×898——帧不该比窗口大。矛盾焦点=getSettings 值可能不是编码用真实帧尺寸（videoWidth 才是真值，未显示）
 - ✅ v2.5.0（**补齐关键数字**：裁剪流真实帧尺寸上面板，纯显示零行为变化）：popup 裁剪时显示「裁剪帧 vw×vh · scale x.xxx · 黑边 n px（框选视口 W×H）」——videoWidth 真值（buildCropStream 实际用的数）与 getSettings 值、映射参数、框选视口一次看全。两种修复方向由该数字决定：videoWidth≈2187×1347（=视口×dpr）→ getSettings 失真、映射用对了数、问题另寻；videoWidth=2240×1400（帧真比窗口大）→ 帧内黑边校准（自适应 letterbox 检测）。验证：语法/smoke PASS
-- ⏳ **待用户复验 v2.5.0**：YouTube 重录展开面板——把「捕获帧」与「裁剪帧」两行数字 + 偏移方向（内容偏上/偏下/偏多少）发我，一击定位修复方向
+- ⏳ ~~待用户复验 v2.5.0~~ → **用户面板数字实锤：裁剪帧 2240×1400（videoWidth 真值=getSettings）· scale 1.536 · 黑边 0px · 框选视口 1458×898**——2240÷1400=**1.6（16:10 档位）** vs 视口 1.624×dpr1.5：**帧与视口内容非等比**（横向 1.5365 vs 纵向 1.559），Chrome 把视口渲染非等比适配进 16:10 帧 → 内容变形，映射按等比假设 → 缩放错位。**路飞/B 站正常=那些会话 Chrome 协商的帧恰好等比（=视口×dpr）——帧尺寸由 Chrome 每次开录自行协商，会话间会漂**
+- ✅ v2.5.1（**约束捕获帧尺寸=视口×dpr**——根治帧协商漂移导致的裁剪变形）：① popup startRecording 经 executeScript（activeTab 已授予）读目标页 `{w: round(innerWidth×dpr), h: round(innerHeight×dpr)}` → `payload.capture`（读取失败不阻断）；② offscreen beginCapture：payload.capture 存在时 video 约束追加 `width/height: {ideal: w/h}`——Chrome 按最接近档位给帧且内容**等比**渲染（1458×898×1.5 → 请求 2187×1347）→ 映射数学（帧=视口×dpr 等比）恢复成立；约束失败时 Chrome 忽略，退化现状（观测面可见）。已知限制（AGENTS 记录）：开录后拖到不同 DPI 显示器/调整窗口 → 约束不再匹配（漂移警告会提示）；ideal 可能给最接近档位（等比性由 Chrome 保证）。验证：语法/smoke PASS、e2e 回归零变化（e2e 无 payload.capture）
+- ⏳ **待用户 Chrome 复验 v2.5.1**：YouTube 框选重录——「裁剪帧」应 ≈ 框选视口×dpr（如 2187×1347）、scale≈1.5、黑边≈0，输出内容无变形位置正确；路飞/B 站常规复录不受影响
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

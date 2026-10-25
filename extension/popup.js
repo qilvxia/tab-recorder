@@ -150,6 +150,17 @@ async function startRecording() {
   };
   const cr = await getCropRegion();
   if (cr) payload.crop = { rect: cr.rect, viewportW: cr.viewportW, viewportH: cr.viewportH };
+  // 捕获帧尺寸约束（物理像素）：Chrome 对 tabCapture 的帧尺寸自行协商且会话间
+  // 会漂（实测漂到 16:10 档位 2240×1400 而窗口视口非等比）→ 内容非等比拉伸进帧，
+  // 裁剪映射变形。显式请求「视口×dpr」让帧与视口内容等比，映射恢复成立。
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tabInfo.id },
+      func: () => ({ w: Math.round(window.innerWidth * window.devicePixelRatio), h: Math.round(window.innerHeight * window.devicePixelRatio) }),
+    });
+    const cap = res && res.result;
+    if (cap && cap.w > 0 && cap.h > 0) payload.capture = cap;
+  } catch (e) { /* 读不到视口（受限页等）就不约束，维持 Chrome 默认协商 */ }
   $("startBtn").disabled = true;
   $("startBtn").textContent = "正在启动…";
   const resp = await chrome.runtime.sendMessage({ type: "start", tabId: tabInfo.id, settings, payload }).catch((e) => ({ ok: false, error: String(e) }));

@@ -298,6 +298,14 @@
     const videoMandatory = { chromeMediaSource: "tab", chromeMediaSourceId: streamId };
     const fps = Number(pendingSettings.frameRate);
     if (fps > 0) videoMandatory.maxFrameRate = fps;
+    // 帧尺寸约束：视口物理尺寸（ideal 语义，Chrome 按最接近档位给帧且内容等比
+    // 渲染）——帧尺寸不约束时 Chrome 自行协商且会话间会漂（漂到非等比档位时
+    // 裁剪映射变形，YouTube 实测「内容缩放错位」）
+    const cap = pendingPayload && pendingPayload.capture;
+    if (cap && cap.w > 0 && cap.h > 0) {
+      videoMandatory.width = { ideal: cap.w };
+      videoMandatory.height = { ideal: cap.h };
+    }
     stream = await navigator.mediaDevices.getUserMedia({
       audio: { mandatory: { chromeMediaSource: "tab", chromeMediaSourceId: streamId } },
       video: { mandatory: videoMandatory },
