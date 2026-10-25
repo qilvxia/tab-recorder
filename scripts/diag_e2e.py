@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """端到端连播诊断：CfT 131 + 扩展真录制链路（真 tabCapture/切段/广播/点击），
-驱动 e2e-test.html（有声视频 8s/节 + 播完评分窗 + 委托按钮，两节循环），
+驱动 e2e-test.html（有声视频 30s/节 + 播完评分窗 + 委托按钮，三节循环），
 每 2 秒采样切段/连播/落盘状态，逐环定位连播断点。
+节长 30s 兼作停播判定的回归探针：playing 心跳缺失时节内第 5s 必误切。
 
 用法：python scripts/diag_e2e.py
 """
@@ -177,8 +178,8 @@ def main():
             "})()" % (tab_id, tab_id), await_promise=True)
         print("录制启动:", resp)
 
-        # 采样 70 秒
-        for i in range(35):
+        # 采样 150 秒（30s/节 × 3 节 + 停播确认与连播间隔）
+        for i in range(75):
             time.sleep(2)
             try:
                 st = sw.eval(

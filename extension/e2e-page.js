@@ -1,6 +1,8 @@
 // e2e-page.js — 端到端诊断测试页：有声视频（canvas 视频轨 + oscillator 音轨）
-// 播放 8 秒 → pause + 派发 ended → 弹评分窗 → 点击「放弃评价观看下一节」后
+// 播放 30 秒 → pause + 派发 ended → 弹评分窗 → 点击「放弃评价观看下一节」后
 // 弹窗关闭、视频重播（模拟下一节自动连播），hash 递增供观测。
+// 节长 30s（原 8s）：验证停播判定不会在长播节内误切——playing 心跳缺失时
+// 节内第 5s 必误切（v2.3.1 N 段根因的回归探针）。
 
 var lessonNum = 1;
 var canvas = document.createElement("canvas");
@@ -42,7 +44,7 @@ function endLesson() {
   }, 800);
 }
 v.addEventListener("ended", endLesson);
-setTimeout(endLesson, 8000); // 无 srcObject ended 的兜底：8 秒强制进入播完流程
+setTimeout(endLesson, 30000); // 无 srcObject ended 的兜底：30 秒强制进入播完流程
 
 document.addEventListener("click", function (e) {
   var t = e.target.closest && e.target.closest("#nextBtn");
@@ -53,6 +55,6 @@ document.addEventListener("click", function (e) {
   document.getElementById("lessonTitle").textContent = "第" + lessonNum + "节 诊断课程";
   document.getElementById("modal").style.display = "none";
   v.play().catch(function (e2) {});
-  setTimeout(endLesson, 8000);
+  setTimeout(endLesson, 30000);
 });
 window.__lessonNum = function () { return lessonNum; };

@@ -358,6 +358,11 @@
       last.url = url;
       last.playing = playing;
       report();
+    } else if (playing) {
+      // 播放心跳：offscreen 的停播判定（5s 闸）依赖 playing 上报持续刷新
+      // lastPlayingTs——变化沿上报会让持续播放期间静默，lastPlayingTs 冻结在
+      // 开播时刻，每约 30s 必误切一段（v2.3.1 N 段根因）。在播期间每轮上报。
+      report();
     }
     if (last.ended && Date.now() - last.endedAt > 10000) last.ended = false; // 未收到 playing 的兜底解除
   }, 700);

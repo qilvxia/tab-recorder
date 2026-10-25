@@ -36,12 +36,12 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 9. **downloads.cancel 不删已完成下载的盘上文件**（removeFile 才删，erase 只清历史）；弃用下载要循环核验到彻底消失
 10. **下载完成回执有竞态**：挂完 onChanged 监听必须补查一次当前状态（幂等）
 11. **executeScript allFrames 只注入已存在的帧**：懒加载播放器 iframe 需周期性补注入（挂 keepalive 心跳约 6s，脚本首行守卫防重复）
-12. **content-detect 只在页面变化时上报**：复录同一页面新 offscreen 收不到初始状态，detect-config 必须触发强制上报；快速连测时页面加载中初始注入会失败，需自动重试
+12. **content-detect 只在页面变化时上报**：复录同一页面新 offscreen 收不到初始状态，detect-config 必须触发强制上报；快速连测时页面加载中初始注入会失败，需自动重试。**例外（v2.3.2）：playing=true 期间每轮心跳上报**——offscreen 停播判定依赖 lastPlayingTs 持续刷新，变化沿上报会使其冻结在开播时刻（每约 30s 误切一段的根因）
 13. 窗口被完全遮挡/最小化 → 画面冻结、声音正常（浏览器省电机制）；配套 legacy-v1/启动录制专用Chrome.bat（--disable-features=CalculateNativeWinOcclusion）
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-23 · v2.2.1）
+## 当前状态（2026-10-25 · v2.3.2）
 
 - ✅ M0/M1/M2：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -64,7 +64,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.2.14（两节合并根因）：连播跳转后页面重载、detector 等 6s 心跳才重注入 → 窗口内 playing 未上报 → 停播静默的 fired 锁不被播放信号重置 → 下一节播完不切；兜底 URL 切节被"课时名未变"闸拦 → 合并。修：① doSplit 后 silenceSplitFired=false（切段即重新武装，30s 间隔防碎切）；② 停播静默启用收紧 `lastPlayingTs > segStartAt`（重注入延迟期不启用，交 URL 兜底）；③ **tabs.onUpdated URL 变化时立即补注入 detector**（重注入从 6s 压到跳转即刻）；④ 删"课时名未变"闸（URL 稳定 3s 已滤抖动，detector 缺失时 URL 切节兜底）
 - ✅ v2.3.0（**节间停止-恢复架构**，用户提议）：停播 5s 确认 → **停止 recorder 并保存当前节**（黑屏期不录，废段问题从设计上消失）→ tabCapture 流与回环**保持活跃**，state="between" → 连播广播点弹窗 → 恢复触发（**播放恢复 playing 或 URL 稳定**，双源）→ **同流开新 recorder 续录**（零丢帧、无二次捕获风险、无 activeTab 失效风险、seq 与识别延续）。e2e 端到端验证：三节循环三文件、between/续录/点击全部工作。e2e 文件命名时序错位为测试页 h1 更新时序特性（真实站点 h1 与当前节同步）。弹出期 badge="‖"、面板「等待下一节」
 - ✅ v2.3.1（分片假 ended 根因修复）：路飞播放器**分片播放**——每个媒体分片结束都触发 video ended → 「ended 立即停录保存」把一节课切成 8 段（每分片一段，弹窗未现连播点击"未找到入口"）。修：**ended 挂起，停播 5 秒统一切节**——分片假 ended 后视频 5 秒内恢复播放 → lastPlayingTs 刷新计数重置不切；真播完持续无播放 ≥5s → 停录保存+广播点击弹窗。**时长守卫方案作废**（用户正确指出录制时长 vs 总时长受开录时点/网络/暂停干扰）。video-ended 不再作为切节信号（正常）
-- ⏳ **待用户 Chrome 验收 v2.3.1**：路飞站分节连播录 3 节以上——每节一个文件、弹窗点掉、序号连续命名正确
+- ⏳ ~~待用户 Chrome 验收 v2.3.1~~ → **用户复验：一个视频仍被分成 N 段**
+- ✅ v2.3.2（**N 段真正根因：playing 上报是变化沿触发，停播判定必然误切**）：content-detect 轮询只在值变化时上报 → 持续播放期间 playing 恒 true **永不雪再上报** → offscreen lastPlayingTs 冻结在开播时刻 → stoppedPlayingCheck 的 5s 闸在开播 5s 后每轮 tick 都满足 → 唯一刷新源是 keepalive 补注入的 forceReport（约 6s 一次）但 6s > 5s 必先误切 → 30s 静默间隔把节奏定为**每约 30 秒误切一段**（3 分钟 ≈ 8 段，与历次复验吻合）。v2.3.1 挂起 ended 后该路径成唯一活跃切段源故"N 段依旧"；e2e 未抓到是因测试页每节仅 8s + `lastPlayingTs > segStartAt` 严格大于恰好挡住节内首查。修：① **playing=true 心跳**——700ms 轮询在播期间每轮上报（5s 闸获 7 倍安全余量；录制期 SW 本被 keepalive 顶活跃，消息量无碍）；② stoppedPlayingCheck 补 `lastSplitInfo={reason:"advance-pause"}`（此前 stopAll 路径不更新面板「上次切节」，真因不可见）；③ 停播切段即广播连播（此前依赖 content ended 事件转发，跨域 iframe 缺失时只剩 45s 兜底）；④ 死代码清理：lastSplitWasIdle（恒 false）及其派生分支（黑屏小段丢弃——between 架构下弹窗期已不录，场景消失）、SEG.silenceCooldownMs（从未使用）
+- ⏳ **待用户 Chrome 验收 v2.3.2**：路飞站分节连播录 3 节以上——每节一个文件、无周期性碎段、弹窗点掉、序号连续命名正确；若仍有异常，面板「上次切节」现在能如实显示 advance-pause（一击定位）
 - ⏳ M3 区域裁剪 → M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

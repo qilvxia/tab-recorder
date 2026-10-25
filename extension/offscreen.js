@@ -35,7 +35,6 @@
     silenceGapMs: 30000, // 两次静默切节的最小间隔（防 audible 抖动）
     minSplitGapMs: 10000, // 全局最小切节间隔：未到间隔时挂起信号保留重试（不丢弃）
     lessonStableMs: 2000, // 课时名同源变化需稳定这么久才切节（滤网络抖动；语义判定见下）
-    silenceCooldownMs: 15000, // 静默切节后的冷却：期间 audible=true 不重新武装静默信号
     idleDiscardBytes: 2 * 1024 * 1024, // 节间黑屏小段丢弃阈值（连播点击前弹窗期录到的部分）
     minLessonSplitBytes: 4 * 1024 * 1024, // lesson 切节前提：当前段 ≥ 此量（约 8 秒内容）才值得单独成文件，否则只改名并入后续
   };
@@ -49,7 +48,6 @@
   let pendingLesson = "";
   let pendingLessonAt = 0;
   let lastSilenceSplitAt = 0;
-  let lastSplitWasIdle = false; // 上次切段是否播完/静默类（此后首个 URL 稳定切段的黑屏小段应丢弃）
   let segStartAt = 0; // 当前段开始时刻（lesson-change 的 URL 联动确认基准）
   let lastSplitInfo = null; // {reason, at}——切节原因（面板临时显示，诊断用）
   let lastPlayingTs = 0; // 最近一次"页面有视频在播"的上报时刻
@@ -276,7 +274,6 @@
     pendingLesson = "";
     pendingLessonAt = 0;
     lastSilenceSplitAt = 0;
-    lastSplitWasIdle = false;
     segStartAt = 0;
     lastSplitInfo = null;
     lastPlayingTs = 0;
@@ -455,7 +452,6 @@
       return;
     }
     lastSplitAt = now();
-    lastSplitWasIdle = reason === "silence-gap"; // video-ended 已挂起（停播判定统一切节）
     // 切段后识别状态重置：mediasession 等高优源的残留值不再挡住下一节识别
     //（下一节的首个识别值从任意源接受，随后来源升级继续收敛）
     currentLessonSrc = "";
@@ -463,13 +459,8 @@
     // 因 detector 重注入延迟而丢失，此处重置可避免下一节播完时被锁不切
     silenceSplitFired = false;
     lastSplitInfo = { reason, at: now() };
-    // 播完/静默类切段 = 页面正停在「等待人工点下一节」的状态 → 触发自动连播。
-    // url-change 切段说明页面已自行跳转，再点会跳过一节，不广播。
-    // 不依赖 video ended 事件：加密播放器（保利威类）不一定触发它。
-    if (lastSplitWasIdle && settings.autoNext !== false) {
-      lastAdvanceBroadcast = now();
-      chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
-    }
+    // url-change/lesson-change 切段 = 页面已自行跳转（连播关闭或用户手点），
+    // 不广播连播；播完/静默类切段的广播在 stoppedPlayingCheck 里做
     const old = recorder;
     const seg = cur;
     recorder = null;
@@ -507,18 +498,7 @@
         pendingUrl = "";
         return;
       }
-      if (lastSplitWasIdle && cur && cur.bytes > 0 && cur.bytes < SEG.idleDiscardBytes) {
-        // 连播点击进下一节：当前段是弹窗期黑屏小段 → 清空缓冲丢弃（recorder 不断流、
-        // 段号不跳；cur.name 保留旧值，让课时名信号自然完成下一次切段）
-        console.info("[rec] 丢弃节间黑屏小段:", cur.bytes, "bytes");
-        bytes -= cur.bytes;
-        cur.chunks = [];
-        cur.bytes = 0;
-        cur.name = currentLesson; // 新节内容直接用已识别的新课时名
-        activeBaseSeg = 0;
-        lastSplitWasIdle = false;
-        pendingUrl = "";
-      } else if (requestSplit("url-change")) {
+      if (requestSplit("url-change")) {
         pendingUrl = "";
       }
     }
@@ -619,6 +599,13 @@
     if (silenceSplitFired || now() - lastSilenceSplitAt < SEG.silenceGapMs) return;
     silenceSplitFired = true;
     lastSilenceSplitAt = now();
+    lastSplitInfo = { reason: "advance-pause", at: now() }; // 面板「上次切节」可见（此前 stopAll 路径不更新，复验看不到真因）
+    // 切段即广播连播：停播确认 = 内容播完 = 弹窗正在出现。此前依赖 content 的
+    // ended 事件转发广播，跨域 iframe 信号缺失时只剩 45s 兜底，点击弹窗太慢。
+    if (settings.autoNext !== false) {
+      lastAdvanceBroadcast = now();
+      chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
+    }
     // 停播 5 秒确认 → 结束当前节并进入节间等待（弹窗期不录制，跳转成功自动续录）
     stopAll("advance-pause", true);
   }
