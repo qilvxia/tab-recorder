@@ -599,6 +599,19 @@
       return;
     }
     if (state !== "recording" || mode !== "segment") { pendingUrl = ""; pendingLesson = ""; return; }
+    // segUrlMode（面板勾选「URL 变化即切节」= 用户标注该站 URL 可信）：
+    // URL 变化**不等稳定期**即刻停录+续录——SPA 切换快，稳定期内新内容可能
+    // 已开播吸进旧节尾部（B 站多 P 实测污染几秒）。即刻切 = 旧节尾部截止
+    // URL 变化瞬间（新内容未开播，干净），新内容从加载期起完整续录零丢失。
+    // 10s 节流防 URL 抖动碎切：未到间隔退回稳定期路径（挂起保留重试）。
+    if (settings.segUrlMode && pendingUrl && now() - lastUrlChangeAt >= 500
+        && state === "recording" && now() - lastSplitAt >= SEG.minSplitGapMs
+        && cur && cur.bytes >= SEG.idleDiscardBytes) {
+      pendingUrl = "";
+      resumeAfterBetween = true;
+      finishSegmentForAdvance("url-change");
+      return;
+    }
     if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
       // 前置：课时名/段名未识别时 URL 变化一律不切段（切了也无法正确命名；识别到位后段名自然补写）。
       // 开录后点播放常使播放器给 URL 加参数——这条前置拦住由此产生的开录碎片段
@@ -730,8 +743,10 @@
     if (keepaliveTimer) { clearInterval(keepaliveTimer); keepaliveTimer = null; }
   }
 
-  // 播完类停录公共尾（停播确认/入口可见/点击成功共用）：更新面板原因 + 立即广播连播 + 停录进节间
+  // 播完类停录公共尾（停播确认/入口可见/点击成功/URL 即刻切共用）：更新面板
+  // 原因 + 占用全局切节间隔 + 立即广播连播 + 停录进节间
   function finishSegmentForAdvance(reason) {
+    lastSplitAt = now(); // 停录切段也计入全局间隔（与 doSplit 同闸，防碎切）
     lastSplitInfo = { reason, at: now() }; // 面板「上次切节」可见（stopAll 路径此前不更新，真因不可见）
     pendingEntryAt = 0; // 停录即失效（续录后残留挂起会被 entryVisibleCheck 立即误停录）
     // 立即广播连播：停录 = 内容播完 = 弹窗正在出现。此前依赖 content 的 ended

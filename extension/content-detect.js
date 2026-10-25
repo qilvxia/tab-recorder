@@ -236,10 +236,20 @@
     let els;
     try { els = document.querySelectorAll(ACTIVE_SEL); } catch (e) { return ""; }
     for (const el of els) {
-      if (!(el.offsetWidth || el.offsetHeight || el.getClientRects().length)) continue;
+      if (!visible(el)) continue;
       if (el.closest("nav,header,footer")) continue; // 导航/页眉页脚里的高亮不是课时
-      const t = okName(el.innerText || el.textContent);
-      if (t && !GENERIC_WORDS.has(t)) return t;
+      // 命中项优先取内部标题子元素——分集/目录列表项常为「序号+标题+时长」混排
+      //（B 站列表项整项 innerText="01. xxx 05:20"，.title-txt 才是纯集名）
+      for (const t of el.querySelectorAll("[class*='title' i]")) {
+        const s = okName(t.textContent);
+        if (s && !GENERIC_WORDS.has(s)) return s;
+      }
+      // 兜底整项文本并剥尾部时长（mm:ss / h:mm:ss）
+      let t = okName(el.innerText || el.textContent);
+      if (t) {
+        t = clean(t.replace(/\s*\d{1,2}:\d{2}(?::\d{2})?\s*$/, ""));
+        if (t.length >= 2 && !GENERIC_WORDS.has(t)) return t;
+      }
     }
     return "";
   }
