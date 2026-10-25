@@ -156,10 +156,17 @@ async function startRecording() {
   try {
     const [res] = await chrome.scripting.executeScript({
       target: { tabId: tabInfo.id },
-      func: () => ({ w: Math.round(window.innerWidth * window.devicePixelRatio), h: Math.round(window.innerHeight * window.devicePixelRatio) }),
+      func: () => ({
+        w: Math.round(window.innerWidth * window.devicePixelRatio),
+        h: Math.round(window.innerHeight * window.devicePixelRatio),
+        cw: window.innerWidth, ch: window.innerHeight,
+      }),
     });
     const cap = res && res.result;
     if (cap && cap.w > 0 && cap.h > 0) payload.capture = cap;
+    // 开录时刻的视口（css）：帧与视口非等比时（Chrome 窗口化把画面拉伸进整屏帧）
+    // 裁剪映射按此横纵独立换算的基准
+    if (cap && cap.cw > 0 && cap.ch > 0) payload.viewport = { w: cap.cw, h: cap.ch };
   } catch (e) { /* 读不到视口（受限页等）就不约束，维持 Chrome 默认协商 */ }
   $("startBtn").disabled = true;
   $("startBtn").textContent = "正在启动…";
@@ -270,7 +277,10 @@ function render(st) {
   if (st.crop) tips.push(`仅录制所选区域（${st.crop.w}×${st.crop.h}）。`);
   if (st.cropError) tips.push("区域裁剪启动失败，已按全画面录制：" + st.cropError);
   if (st.crop && st.crop.vw) {
-    tips.push(`裁剪帧 ${st.crop.vw}×${st.crop.vh} · scale ${st.crop.scale.toFixed(3)} · 黑边 ${Math.round(st.crop.letterbox)}px（框选视口 ${st.crop.viewportW}×${st.crop.viewportH}）`);
+    const map = st.crop.stretch
+      ? `拉伸 x${st.crop.sxScale.toFixed(3)}/y${st.crop.syScale.toFixed(3)}`
+      : `scale ${st.crop.scale.toFixed(3)} · 黑边 ${Math.round(st.crop.letterbox)}px`;
+    tips.push(`裁剪帧 ${st.crop.vw}×${st.crop.vh} · ${map}（框选视口 ${st.crop.viewportW}×${st.crop.viewportH}）`);
   }
   if (st.captureSize && st.captureSize.w) {
     const cv = st.curViewport ? `，当前视口 ${st.curViewport.w}×${st.curViewport.h}·dpr${st.curViewport.dpr}` : "";

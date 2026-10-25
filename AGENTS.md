@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-26 · v2.5.2）
+## 当前状态（2026-10-26 · v2.5.3）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -99,7 +99,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.5.1（**约束捕获帧尺寸=视口×dpr**——根治帧协商漂移导致的裁剪变形）：① popup startRecording 经 executeScript（activeTab 已授予）读目标页 `{w: round(innerWidth×dpr), h: round(innerHeight×dpr)}` → `payload.capture`（读取失败不阻断）；② offscreen beginCapture：payload.capture 存在时 video 约束追加 `width/height: {ideal: w/h}`——Chrome 按最接近档位给帧且内容**等比**渲染（1458×898×1.5 → 请求 2187×1347）→ 映射数学（帧=视口×dpr 等比）恢复成立；约束失败时 Chrome 忽略，退化现状（观测面可见）。已知限制（AGENTS 记录）：开录后拖到不同 DPI 显示器/调整窗口 → 约束不再匹配（漂移警告会提示）；ideal 可能给最接近档位（等比性由 Chrome 保证）。验证：语法/smoke PASS、e2e 回归零变化（e2e 无 payload.capture）
 - ⏳ ~~待用户 Chrome 复验 v2.5.1~~ → **用户复验：裁剪帧仍 2240×1400——{ideal} 约束被静默忽略**
 - ✅ v2.5.2（**legacy mandatory 语法修正**——宽高数字直填 + 过约束自动降级）：tabCapture 的 getUserMedia 用 **legacy mandatory 约束语法**——不支持 `{ideal: X}` 对象（v2.5.1 被静默忽略，帧仍 2240×1400），但支持数字直填（旁证：maxFrameRate: 30 数字约束一直在生效）。修：① `videoMandatory.width/height = cap.w/h` 数字直填（精确语义）；② getUserMedia 包 try/catch——抛错（Chrome 给不了精确尺寸/不接受宽高）→ 删宽高约束**降级重试**（录制不失败），未加约束时的失败原样抛出。佐证深化：2240×1400 = **显示器逻辑整屏**（3360×2100÷1.5）——Chrome 的 tabCapture 帧协商疑似以屏为准而非窗口视口（帧比窗口视口渲染大 53 物理px），解释帧为什么比窗口大 + 路飞/B 站（窗口最大化时帧≈视口）没暴露。实施注意：改造时曾引入 `let stream` 局部遮蔽模块级 stream 的 bug（后续回环/轨道监听全用模块级变量），已修。验证：语法/smoke PASS、e2e 回归零变化
-- ⏳ **待用户 Chrome 复验 v2.5.2**：面板「裁剪帧」≈2187×1347（请求尺寸）→ 约束生效修复成立；仍 2240×1400 → Chrome 完全忽略 tabCapture 宽高约束（平台限制，转备用方案：映射横纵独立比例校准，需先确认帧内容是拉伸还是黑边适配）
+- ⏳ ~~待用户 Chrome 复验 v2.5.2~~ → **用户复验：毫无变化——数字直填也被忽略，Chrome 对 tabCapture 宽高约束完全无视（平台行为）**
+- ✅ v2.5.3（**裁剪映射自适应帧模型**——横纵独立换算 + 运行时判定，转攻映射而非帧）：**根因终局**（观测数字拼齐）：帧真值 2240×1400 = **显示器 150% 缩放下逻辑整屏**（3360×2100÷1.5）——**Chrome 窗口化录制时帧取整屏逻辑尺寸**（约束数字直填也被忽略，平台行为），**窗口画面被非等比拉伸填满帧**（横向 1.5365/纵向 1.559，差 1.5%）——映射假设"帧=视口等比+垂直黑边"，纵向错 1.5% → 缩放错位；路飞/B 站正确=窗口最大化时帧≈视口、两模型等价。修（转攻映射，不修帧）：① popup executeScript 顺带带出 css 视口 → `payload.viewport`（开录时刻内容布局基准）；② **buildCropStream 模型判定**：基准视口 vp=payload.viewport||框选视口，sxScale=vw/vp.w、syScale=vh/vp.h，`|syScale/sxScale−1|≥1%` → **拉伸模型**（横纵独立换算，letterbox=0）；<1% → **黑边模型**（原数学：等比 scale+letterbox——Edge diag_crop 实测定律与最大化场景兼容）；cropOut 扩展 {sxScale,syScale,stretch} 面板显示「拉伸 x…/y…」；③ 偶数取整/<16px/约束降级/between 复用不动。各场景：YouTube 窗口化 1.48%≥1% → 拉伸 ✓；最大化等比 → 黑边模型 letterbox≈0 ✓ 与拉伸等价；Edge 等比 → 原数学 ✓；e2e 等比 → 原路径零变化。验证：语法/smoke PASS、e2e 回归零变化
+- ⏳ **待用户 Chrome 复验 v2.5.3**：YouTube 框选重录——面板显示「拉伸 x1.536/y1.559」，输出应无变形位置正确；路飞/B 站常规复录不受影响
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ⏳ M4 手填文件名 + 自动停止三件
 - ⏳ 上架流程未开始
 

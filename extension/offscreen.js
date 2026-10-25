@@ -177,15 +177,38 @@
       });
     }
     const vw = video.videoWidth, vh = video.videoHeight;
-    // 实测定律（diag_crop.py）：tabCapture 帧按 视口宽 统一缩放；当帧纵横比与视口
-    // 不一致时垂直居中、上下补黑边（letterbox）。无黑边时 offset 自然为 0。
-    const scale = crop.viewportW > 0 ? vw / crop.viewportW : 1;
-    const letterbox = Math.max(0, (vh - crop.viewportH * scale) / 2);
+    // 帧模型自适应（映射基准 = 开录时刻视口，框选视口兜底）：
+    // - 拉伸模型：Chrome 窗口化录制时帧取**整屏逻辑尺寸**（约束被平台忽略），
+    //   窗口画面被**非等比拉伸**填满帧（实测横向 1.5365/纵向 1.559，差 1.5%）
+    //   → 横纵独立换算；
+    // - 黑边模型：帧=视口×scale 等比 + 垂直居中补黑边（Edge 实测定律，
+    //   diag_crop 验证）→ 等比换算 + letterbox 补偿。
+    // 判定：帧纵横比 vs 视口纵横比差 ≥1%（非等比）→ 拉伸；否则黑边。
+    // 最大化窗口时两模型等价（帧≈视口×dpr，letterbox≈0）。
+    const vp = (pendingPayload && pendingPayload.viewport && pendingPayload.viewport.w > 0)
+      ? pendingPayload.viewport
+      : { w: crop.viewportW, h: crop.viewportH };
+    const sxScale = vw / vp.w;
+    const syScale = vh / vp.h;
+    const stretch = Math.abs(syScale / sxScale - 1) >= 0.01;
     const r = crop.rect;
-    const sx = Math.min(Math.max(0, Math.floor(r.x * scale)), vw - 2);
-    const sy = Math.min(Math.max(0, Math.floor(r.y * scale + letterbox)), vh - 2);
-    let sw = Math.min(vw - sx, Math.floor(r.w * scale));
-    let sh = Math.min(vh - sy, Math.floor(r.h * scale));
+    let sx, sy, sw, sh, letterbox = 0, scale;
+    if (stretch) {
+      sx = Math.min(Math.max(0, Math.floor(r.x * sxScale)), vw - 2);
+      sy = Math.min(Math.max(0, Math.floor(r.y * syScale)), vh - 2);
+      sw = Math.min(vw - sx, Math.floor(r.w * sxScale));
+      sh = Math.min(vh - sy, Math.floor(r.h * syScale));
+      scale = 0; // 拉伸模型无单一 scale（面板显示双比例）
+    } else {
+      // 实测定律（diag_crop.py）：tabCapture 帧按 视口宽 统一缩放；当帧纵横比与
+      // 视口不一致时垂直居中、上下补黑边。无黑边时 offset 自然为 0。
+      scale = sxScale;
+      letterbox = Math.max(0, (vh - vp.h * scale) / 2);
+      sx = Math.min(Math.max(0, Math.floor(r.x * scale)), vw - 2);
+      sy = Math.min(Math.max(0, Math.floor(r.y * scale + letterbox)), vh - 2);
+      sw = Math.min(vw - sx, Math.floor(r.w * scale));
+      sh = Math.min(vh - sy, Math.floor(r.h * scale));
+    }
     sw -= sw % 2; sh -= sh % 2; // H.264 yuv420 要求偶数尺寸
     if (sw < 16 || sh < 16) throw new Error("裁剪区域换算后过小");
 
@@ -204,7 +227,7 @@
     const timer = setInterval(draw, Math.max(1000 / fps, 8));
     const canvasStream = canvas.captureStream(fps);
     cropPipe = { video, canvasStream, timer };
-    cropOut = { w: sw, h: sh, vw, vh, scale, letterbox, viewportW: crop.viewportW, viewportH: crop.viewportH }; // 映射参数入面板：缩放错位时对照两端数字
+    cropOut = { w: sw, h: sh, vw, vh, scale, sxScale, syScale, stretch, letterbox, viewportW: crop.viewportW, viewportH: crop.viewportH }; // 映射参数入面板：缩放错位时对照两端数字
     return new MediaStream([
       canvasStream.getVideoTracks()[0],
       ...srcStream.getAudioTracks(),
