@@ -109,6 +109,8 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 
 ## 开发与测试
 
+**git 约定（用户指令）：只 commit，不 push**——push 由用户自己执行（本机 push 需走代理 `git -c http.proxy=http://127.0.0.1:7897 push`，直连被重置）。
+
 ```bash
 python -c "import json;json.load(open('extension/manifest.json',encoding='utf-8'))"
 node --check extension/*.js   # 逐个
