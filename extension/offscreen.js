@@ -258,12 +258,20 @@
     return r;
   }
 
+  // 解除 URL 刹车（否决切分的路径调用，防录制卡在暂停）
+  function releaseUrlBrake() {
+    if (!urlBrakeApplied) return;
+    urlBrakeApplied = false;
+    try { recorder && recorder.state === "paused" && recorder.resume(); } catch (e) {}
+  }
+
   function startSegment() {
     seq += 1;
     cur = { seq, name: currentLesson || "", chunks: [], bytes: 0 };
     activeBaseSeg = 0;
     segStartAt = now(); // lesson-change 的 URL 联动确认基准：本段开始后 URL 变过才算真换课
     segLessonAtStart = currentLesson || ""; // URL 切节「课时名未变否决」的基准（见 checkPendingSplits）
+    urlBrakeApplied = false; // 新 recorder 天然无刹车
     if (resumeTs === null) resumeTs = now();
     recorder = makeRecorder();
     recorder.start(1000);
@@ -407,6 +415,7 @@
     lastUrl = payload.tabUrl || "";
     lastUrlFp = urlFingerprint(lastUrl);
     urlLog = [];
+    urlBrakeApplied = false;
     pendingUrl = "";
     lastUrlChangeAt = 0;
     pendingLesson = "";
@@ -612,6 +621,7 @@
     // 不触发连播广播——空段切出去就是碎片段，还会错位占用全局间隔
     if (cur && cur.bytes < SEG.idleDiscardBytes) {
       console.info("[rec] split rejected (段内容不足):", reason, cur.bytes, "bytes");
+      releaseUrlBrake(); // 拒绝切分：刹车必须解除，否则录制卡在暂停
       return;
     }
     lastSplitAt = now();
@@ -641,6 +651,11 @@
   // YouTube 全是 ~10s 碎片（t 变化周期恰与全局 10s 节流同频）。B 站 p、YouTube
   // v/list/index 等课时标识参数不在名单，变化正常生效。
   const PROGRESS_PARAM_KEYS = ["t", "t2", "time", "start", "progress", "at", "ts", "timestamp"];
+  let urlBrakeApplied = false; // URL 刹车已施加（编码器已暂停，等待切分/恢复）
+  // URL 变化观测日志：记录每次变化的原样 URL 与指纹判定结果——「网址一变就切」
+  // 的剥除名单基于假设（YouTube 用 &t= 记进度），真实变化模式以观测为准
+  let urlLog = []; // 最近 5 条 {u, changed, at}
+
   function urlFingerprint(url) {
     try {
       const u = new URL(url);
@@ -649,10 +664,6 @@
       return u.origin + u.pathname + u.search;
     } catch (e) { return url; }
   }
-
-  // URL 变化观测日志：记录每次变化的原样 URL 与指纹判定结果——「网址一变就切」
-  // 的剥除名单基于假设（YouTube 用 &t= 记进度），真实变化模式以观测为准
-  let urlLog = []; // 最近 5 条 {u, changed, at}
 
   function onUrlChange(url) {
     if (!url || url === lastUrl) return;
@@ -669,6 +680,14 @@
     lastUrlFp = fp;
     pendingUrl = url;
     lastUrlChangeAt = now();
+    // URL 刹车（segUrlMode）：内容标识变化**瞬间**暂停编码器——从这一刻起旧节
+    // 不再吸收任何帧，尾部干净无污染（后续 tick 走即刻切分完成停录+续录；检测
+    // 延迟不再影响旧节内容）。极端场景（10s 节流期内连续切 P）保持暂停到节流
+    // 期满再切，损失新内容开头几秒而不是污染旧节——与"录了再扔不如不录"一致。
+    if (settings.segUrlMode && state === "recording" && mode === "segment"
+        && recorder && recorder.state === "recording" && !urlBrakeApplied) {
+      try { recorder.pause(); urlBrakeApplied = true; } catch (e) {}
+    }
   }
 
   // tick 周期检查：URL/课时名挂起变化的稳定期判定（被全局闸拒绝时保留挂起，下轮重试）
@@ -705,6 +724,7 @@
       // 开录后点播放常使播放器给 URL 加参数——这条前置拦住由此产生的开录碎片段
       if (!currentLesson || !cur || !cur.name) {
         pendingUrl = "";
+        releaseUrlBrake(); // 否决切分：刹车必须解除，否则录制卡在暂停
         return;
       }
       // 课时名语义否决（N 段根因修复）：本段开始时已识别且至今同名，或段开始时

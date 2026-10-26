@@ -237,35 +237,40 @@
   }
 
   // ③ 高亮列表项：课程目录里标记为当前/正在播放的条目
+  // 按**优先级逐个**查询（不是逗号合并一次查——合并查询按文档序返回，页面上
+  // 文档序更早的弱标记元素（播放器设置项/option[selected]，常带 aria-selected）
+  // 会抢在真正的分集列表项之前返回错值——B 站/路飞识别退化根因）。
   // [selected]/[aria-selected]：YouTube 播放列表（ytd-*-renderer[selected]）与
-  // ARIA 组件库的通用"当前项"标记——与 class/aria-current 类标记叠加并存
-  const ACTIVE_SEL = [
+  // ARIA 组件库的通用标记——排最后兜底且排除 option（下拉框选中项不是课时）
+  const ACTIVE_SELS = [
     '[aria-current="true" i]', '[aria-current="page" i]',
     'li[class*="active" i] a', 'a[class*="active" i]',
     'li[class*="current" i] a', 'a[class*="current" i]',
     'li[class*="on"] a', '[class*="playing" i]:not(video)',
-    'dd[class*="active" i]', '[selected]', '[aria-selected="true" i]',
-    '[class*="active" i]',
-  ].join(",");
+    'dd[class*="active" i]', '[class*="active" i]',
+    '[selected]:not(option)', '[aria-selected="true" i]:not(option)',
+  ];
 
   function pickActiveListItem() {
-    let els;
-    try { els = document.querySelectorAll(ACTIVE_SEL); } catch (e) { return ""; }
-    for (const el of els) {
-      if (!visible(el)) continue;
-      if (el.closest("nav,header,footer")) continue; // 导航/页眉页脚里的高亮不是课时
-      // 命中项优先取内部标题子元素——分集/目录列表项常为「序号+标题+时长」混排
-      //（B 站列表项整项 innerText="01. xxx 05:20"，.title-txt 才是纯集名；
-      // YouTube 列表项是 span#video-title——class 或 id 含 title 都认）
-      for (const t of el.querySelectorAll("[class*='title' i],[id*='title' i]")) {
-        const s = okName(t.textContent);
-        if (s && !GENERIC_WORDS.has(s)) return s;
-      }
-      // 兜底整项文本并剥尾部时长（mm:ss / h:mm:ss）
-      let t = okName(el.innerText || el.textContent);
-      if (t) {
-        t = clean(t.replace(/\s*\d{1,2}:\d{2}(?::\d{2})?\s*$/, ""));
-        if (t.length >= 2 && !GENERIC_WORDS.has(t)) return t;
+    for (const sel of ACTIVE_SELS) {
+      let els;
+      try { els = document.querySelectorAll(sel); } catch (e) { continue; }
+      for (const el of els) {
+        if (!visible(el)) continue;
+        if (el.closest("nav,header,footer")) continue; // 导航/页眉页脚里的高亮不是课时
+        // 命中项优先取内部标题子元素——分集/目录列表项常为「序号+标题+时长」混排
+        //（B 站列表项整项 innerText="01. xxx 05:20"，.title-txt 才是纯集名；
+        // YouTube 列表项是 span#video-title——class 或 id 含 title 都认）
+        for (const t of el.querySelectorAll("[class*='title' i],[id*='title' i]")) {
+          const s = okName(t.textContent);
+          if (s && !GENERIC_WORDS.has(s)) return s;
+        }
+        // 兜底整项文本并剥尾部时长（mm:ss / h:mm:ss）
+        let t = okName(el.innerText || el.textContent);
+        if (t) {
+          t = clean(t.replace(/\s*\d{1,2}:\d{2}(?::\d{2})?\s*$/, ""));
+          if (t.length >= 2 && !GENERIC_WORDS.has(t)) return t;
+        }
       }
     }
     return "";
@@ -397,9 +402,13 @@
   let pollTimerId = 0;
   pollTimerId = setInterval(() => {
     if (ctxDead()) {
-      // 扩展重载后的旧实例：彻底停摆（上报调用已在 try/catch 内静默，
-      // 轮询也停止——新实例已由守卫 token 注入流程重建接管）
+      // 扩展重载后的旧实例：彻底停摆并**清守卫标记**——守卫残留会让同 token 的
+      // keepalive 补注入静默空操作（新实例被挡），检测全链路死亡（识别「第N节」
+      // + 连播失效）。清除后补注入即可重建实例（token func 不匹配路径本来就会清）
       clearInterval(pollTimerId);
+      advTimers.forEach(clearTimeout);
+      advTimers = [];
+      delete window.__tabRecDetector;
       return;
     }
     trackVideos();
