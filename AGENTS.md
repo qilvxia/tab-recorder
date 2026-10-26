@@ -25,7 +25,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 
 ## 已知限制与环境事实（v1 踩坑实录，v2 全部适用）
 
-1. **Chrome 稳定版（≥M137）禁用 `--load-extension`**：自动化用 Edge 或 CfT（**本机只有 CfT 131 能跑**，139/148 秒退 code=3；装在 `.cft/chrome-win64/`）。/json/list 会混入浏览器组件扩展，必须按 manifest 名称匹配
+1. **Chrome 稳定版（≥M137）禁用 `--load-extension`**：自动化用 Edge 或 CfT（**本机只有 CfT 131 能跑**，139/148 秒退 code=3；CfT 131 本体已于 v2.5.4 后按用户指示删除，需要跑 diag_* 端到端诊断时重新下载）。/json/list 会混入浏览器组件扩展，必须按 manifest 名称匹配
 2. **测试脚本路径一律正斜杠**——反斜杠经某些命令行层 `\t` 变 TAB（Edge 弹「清单文件丢失」）
 3. **`.ps1` 必须纯 ASCII**——UTF-8 中文注释被 PowerShell 5.1 按 GBK 误读破坏语法
 4. **MV3 SW 空闲约 30 秒停转**，从 CDP /json/list 消失；发现前 `PUT /json/new` 开标签页唤醒
@@ -109,7 +109,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 
 ## 开发与测试
 
-**git 约定（用户指令）：只 commit，不 push**——push 由用户自己执行（本机 push 需走代理 `git -c http.proxy=http://127.0.0.1:7897 push`，直连被重置）。
+**git 约定（用户指令）：只 commit，不 push**——push 由用户自己执行。
 
 ```bash
 python -c "import json;json.load(open('extension/manifest.json',encoding='utf-8'))"
@@ -126,6 +126,5 @@ powershell -File scripts/kill_test_chrome.ps1  # 清理测试进程
   - `offscreen.html/js` 录制引擎：取流、回环、延时、MediaRecorder、File+锚点保存
   - `content-detect.js` 按需注入（allFrames + 重试）：播放标题七级级联、播完事件
   - `popup.html/css/js` 控制面板（延时/开始/停止/状态；M2 加回模式切换）
-- `scripts/` — smoke_test.py（Edge 冒烟）、kill_test_chrome.ps1、make_icons.py
+- `scripts/` — smoke_test.py（Edge 冒烟）、kill_test_chrome.ps1、make_icons.py、diag_e2e/diag_bili/diag_crop（CfT 端到端诊断——CfT 131 本体已删，跑之前需重新下载）
 - `legacy-v1/` — v1.1.11 完整归档（含降级链/状态窗/自定义目录等全部历史与文档）
-- `.cft/chrome-win64/` — Chrome for Testing 131（命名/下载行为实测用）
