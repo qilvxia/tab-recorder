@@ -3,3 +3,6 @@
 .diag-tmp/
 *.log
 .diag-profile/
+*.zip
+.diag-bili-profile/
+.diag-*-out.txt
