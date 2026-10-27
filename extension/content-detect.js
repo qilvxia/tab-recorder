@@ -11,7 +11,7 @@
   window.__tabRecDetector = true;
 
   let cfg = { lessonSelector: "h1", courseSelector: "", autoNext: false };
-  let last = { lesson: "", lessonSrc: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false, viewport: null };
+  let last = { lesson: "", lessonSrc: "", lessonAlt: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false, viewport: null };
   const seenVideos = new Set();
 
   // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
@@ -223,7 +223,9 @@
       chrome.runtime.sendMessage({
         type: "content-report",
         data: {
-          lesson: last.lesson, lessonSrc: last.lessonSrc, course: last.course,
+          lesson: last.lesson, lessonSrc: last.lessonSrc,
+          lessonAlt: last.lessonAlt, lessonAltSrc: last.lessonAlt ? "active-item" : "",
+          course: last.course,
           url: last.url, ended: last.ended, playing: last.playing,
           viewport: last.viewport,
         },
@@ -428,6 +430,10 @@
     }
     trackVideos();
     const { name, src } = resolveLessonName();
+    // 帧内备选：高亮列表项与主值并行上报——B 站 mediaSession 恒为合集总标题
+    //（级联首位挡死 active-item，分集名从未离开页面=v2.5.5 修复无效的根因），
+    // 竞争上移到 offscreen 的多源语义层（降级挂起接管等）裁决
+    const altName = src === "active-item" ? "" : pickActiveListItem();
     const course = pick(cfg.courseSelector);
     // url 只报顶层帧：iframe 的 location.href（广告容器/预创建组件常见 about:blank）
     // 与换课无关，混进来会与顶层地址交替覆盖、每次交替都判为内容变化 → 周期性碎切
@@ -456,10 +462,11 @@
     }
     const vpChanged = JSON.stringify(last.viewport) !== last.vpJson;
     if (vpChanged) last.vpJson = JSON.stringify(last.viewport);
-    if (forceReport || vpChanged || playing !== last.playing || name !== last.lesson || course !== last.course || url !== last.url) {
+    if (forceReport || vpChanged || playing !== last.playing || name !== last.lesson || altName !== last.lessonAlt || course !== last.course || url !== last.url) {
       forceReport = false;
       last.lesson = name;
       last.lessonSrc = src;
+      last.lessonAlt = altName;
       last.course = course;
       last.url = url;
       last.playing = playing;

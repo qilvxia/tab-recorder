@@ -100,6 +100,15 @@ PROBE_JS = r"""(() => {
     biliActiveTitleTxt: clean((document.querySelector(".video-pod__item.active .title-txt") || {}).textContent || "(NOT FOUND)"),
     biliActiveFullText: clean((document.querySelector(".video-pod__item.active") || {}).innerText || "(NOT FOUND)").slice(0, 60),
     ytSelectedTitle: clean((document.querySelector("ytd-playlist-panel-video-renderer[selected] #video-title") || {}).textContent || "(NOT FOUND)"),
+    // 全级联模拟（对齐真实上报）：主值 = 级联首位非空（B 站=mediasession 合集标题），
+    // 备选 lessonAlt = active-item 并行——offscreen 端降级挂起接管的输入
+    fullCascade: (() => {
+      let msTitle = ""; try { msTitle = (navigator.mediaSession && navigator.mediaSession.metadata && navigator.mediaSession.metadata.title) || ""; } catch (e) {}
+      const h1 = clean((document.querySelector("h1") || {}).textContent || "");
+      const main = clean(msTitle) || okName(h1) || simNewLogic.val || "";
+      const alt = main === simNewLogic.val ? "" : simNewLogic.val;
+      return { main, alt, altSrc: alt ? "active-item" : "" };
+    })(),
     simNewLogic,
     nearVideo,
     perSel,

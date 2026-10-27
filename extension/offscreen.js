@@ -797,51 +797,54 @@
     return !x || !y || x === y || x.includes(y) || y.includes(x);
   };
 
-  function onContent(data) {
-    if (!data) return;
-    if (data.lesson) {
-      const name = stripLessonPrefix(data.lesson);
-      const src = String(data.lessonSrc || "");
-      if (name && name !== currentLesson) {
-        const rank = SRC_RANK[src] || 0;
-        const curRank = SRC_RANK[currentLessonSrc] || 0;
-        if (currentLesson && rank < curRank) {
-          // 来源降级：挂起观察（见函数头②）——稳定 2s 且高 rank 未变则接管
-          if (pendingLowerRank && pendingLowerRank.name === name && pendingLowerRank.src === src) {
-            if (now() - pendingLowerRank.at >= 2000) {
-              console.info("[rec] 降级源稳定接管（高 rank 值未随内容变化）:", src, name);
-              pendingLowerRank = null;
-              currentLesson = name;
-              currentLessonSrc = src;
-              if (cur && cur.name !== name) cur.name = name;
-            }
-          } else {
-            pendingLowerRank = { name, src, at: now() };
-          }
-          return;
+  function applyLessonReport(name, src) {
+    if (!(name && name !== currentLesson)) {
+      if (name && name === currentLesson) pendingLowerRank = null; // 降级源回到同名，撤挂起
+      return;
+    }
+    const rank = SRC_RANK[src] || 0;
+    const curRank = SRC_RANK[currentLessonSrc] || 0;
+    if (currentLesson && rank < curRank) {
+      // 来源降级：挂起观察（见函数头②）——稳定 2s 且高 rank 未变则接管
+      if (pendingLowerRank && pendingLowerRank.name === name && pendingLowerRank.src === src) {
+        if (now() - pendingLowerRank.at >= 2000) {
+          console.info("[rec] 降级源稳定接管（高 rank 值未随内容变化）:", src, name);
+          pendingLowerRank = null;
+          currentLesson = name;
+          currentLessonSrc = src;
+          if (cur && cur.name !== name) cur.name = name;
         }
-        pendingLowerRank = null; // 正常路径到达 = 高 rank 值在变化，撤降级挂起
-        // 来源升级仅限「识别源非空且优先级更高」。切段后 src 被清空，若空源也算
-        // 升级，下一节首个上报就会误判升级并改写已有段名——合并段被命名成下一节
-        // 的根因。空源 = 首次识别/重识别：只补空段名，不动已有段名。
-        const isSourceUpgrade = !!currentLessonSrc && rank > curRank;
-        currentLesson = name;
-        currentLessonSrc = src;
-        if (state === "recording" && mode === "segment") {
-          // 升级改写加相关性前提（见函数头①）：无关值不覆盖已立段名
-          if (cur && (!cur.name || (isSourceUpgrade && nameRelated(cur.name, name)))) cur.name = name;
-          if (isSourceUpgrade) {
-            console.info("[rec] 识别来源升级:", src, name); // 识别收敛，不切节
-          } else if (cur) {
-            // 同源值变化 = 真换课，挂起走稳定期
-            pendingLesson = name;
-            pendingLessonAt = now();
-          }
-        }
-      } else if (name && name === currentLesson) {
-        pendingLowerRank = null; // 降级源回到与当前同名，撤挂起
+      } else {
+        pendingLowerRank = { name, src, at: now() };
+      }
+      return;
+    }
+    pendingLowerRank = null; // 正常路径到达 = 高 rank 值在变化，撤降级挂起
+    // 来源升级仅限「识别源非空且优先级更高」。切段后 src 被清空，若空源也算
+    // 升级，下一节首个上报就会误判升级并改写已有段名——合并段被命名成下一节
+    // 的根因。空源 = 首次识别/重识别：只补空段名，不动已有段名。
+    const isSourceUpgrade = !!currentLessonSrc && rank > curRank;
+    currentLesson = name;
+    currentLessonSrc = src;
+    if (state === "recording" && mode === "segment") {
+      // 升级改写加相关性前提（见函数头①）：无关值不覆盖已立段名
+      if (cur && (!cur.name || (isSourceUpgrade && nameRelated(cur.name, name)))) cur.name = name;
+      if (isSourceUpgrade) {
+        console.info("[rec] 识别来源升级:", src, name); // 识别收敛，不切节
+      } else if (cur) {
+        // 同源值变化 = 真换课，挂起走稳定期
+        pendingLesson = name;
+        pendingLessonAt = now();
       }
     }
+  }
+
+  function onContent(data) {
+    if (!data) return;
+    if (data.lesson) applyLessonReport(stripLessonPrefix(data.lesson), String(data.lessonSrc || ""));
+    // 帧内备选（active-item）：与主值并行竞争（B 站 mediaSession=合集总标题，
+    // 分集名只能从这条通道到 offscreen——经降级挂起接管语义裁决）
+    if (data.lessonAlt) applyLessonReport(stripLessonPrefix(data.lessonAlt), String(data.lessonAltSrc || "active-item"));
     if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);
     if (data.url) onUrlChange(data.url);
     if (data.viewport && data.viewport.w > 0) {
