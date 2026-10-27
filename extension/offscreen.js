@@ -72,6 +72,10 @@
   let lastAdvanceBroadcast = 0; // 最近一次连播广播时刻（定时兜底用）
   let endedLatchTs = 0; // 单段模式 ended 事件锁存时刻（5s 无 playing 恢复 = 真播完）
   let endedStopFired = false; // 单段 ended 停止一次性锁（停过不再重复触发）
+  let endedSeen = false; // 最近一次 ended 后未再播放——弹窗入口信号的"播完"前提：
+  //   暂停时播放器控制栏的「下一集」按钮可见（class 启发式命中），若仅凭可见就
+  //   停录会碎片循环（暂停→停录→节间恢复→又停录…，B 站 ~15s/YouTube ~47s 一个
+  //   碎片，且每次恢复重置收工计时）。ended 事件到达且未再播 = 真播完才认弹窗。
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -248,7 +252,11 @@
   }
 
   function makeRecorder() {
-    const r = new MediaRecorder(recStream, {
+    // 录制内容过滤（裁剪流之后）：仅音频=音频轨、仅视频=视频轨（回环仍接原流，仅视频时扬声器照常出声）
+    let rs = recStream || stream;
+    if (settings.recordKind === "audio") rs = new MediaStream(rs.getAudioTracks());
+    else if (settings.recordKind === "video") rs = new MediaStream(rs.getVideoTracks());
+    const r = new MediaRecorder(rs, {
       mimeType: mime,
       videoBitsPerSecond: Number(settings.videoBitrate) || 4000000,
       audioBitsPerSecond: Number(settings.audioBitrate) || 128000,
@@ -276,6 +284,7 @@
     activeBaseSeg = 0;
     segStartAt = now(); // lesson-change 的 URL 联动确认基准：本段开始后 URL 变过才算真换课
     segLessonAtStart = currentLesson || ""; // URL 切节「课时名未变否决」的基准（见 checkPendingSplits）
+    endedSeen = false; // 新段从"未播完"开始（弹窗入口前提重新收敛）
     urlBrakeApplied = false; // 新 recorder 天然无刹车
     if (resumeTs === null) resumeTs = now();
     recorder = makeRecorder();
@@ -407,7 +416,10 @@
     courseFolder = sanitize(payload.courseFolder || "", 40);
     crop = payload.crop && payload.crop.rect ? payload.crop : null;
 
-    mime = pickMime(settings.format === "webm" ? "webm" : "mp4");
+    // 仅音频输出 webm（MP4 直录不支持纯音轨容器）；仅视频保持所选格式
+    mime = settings.recordKind === "audio"
+      ? pickMime("webm")
+      : pickMime(settings.format === "webm" ? "webm" : "mp4");
     ext = mime.startsWith("video/mp4") ? "mp4" : "webm";
 
     seq = 0;
@@ -439,6 +451,7 @@
     lastAdvanceBroadcast = 0;
     endedLatchTs = 0;
     endedStopFired = false;
+    endedSeen = false;
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
                          // 导致全局闸从开录起失效——开录静默误切段、占闸挤掉真播完信号）
     silenceSplitFired = false;
@@ -485,7 +498,7 @@
     return { ok: true };
   }
 
-  function stopAll(reason, keepOffscreen) {
+  function stopAll(reason, keepOffscreen, discard) {
     if (state === "stopping" || state === "idle") return { ok: true };
     // 自动停止类原因面板可见（复验免开 F12 一击定位；manual 等不占"切节"语义）
     if (["video-stopped", "video-ended", "preset", "idle-wrap"].includes(reason)) {
@@ -518,7 +531,9 @@
     const deadline = now() + 300000; // 大文件落定上限 5 分钟
     if (resumeTs !== null) { const t = now(); activeBaseSeg += t - resumeTs; activeBaseTotal += t - resumeTs; resumeTs = null; }
     if (recorder && recorder.state !== "inactive") {
-      recorder.onstop = () => finalizeSegment(cur).then(maybeFinish);
+      recorder.onstop = discard
+        ? () => { console.info("[rec] 丢弃当前段（停止不保存）:", cur && cur.bytes, "bytes"); maybeFinish(); }
+        : () => finalizeSegment(cur).then(maybeFinish);
       try { recorder.stop(); } catch (e) { maybeFinish(); }
     } else {
       maybeFinish();
@@ -798,10 +813,9 @@
   };
 
   function applyLessonReport(name, src) {
-    if (!(name && name !== currentLesson)) {
-      if (name && name === currentLesson) pendingLowerRank = null; // 降级源回到同名，撤挂起
-      return;
-    }
+    // 同名上报不影响竞争状态——曾在此撤降级挂起，但主值每 700ms 心跳同值上报
+    // 会把备选源的接管计时反复清零，2s 稳定永不到达（B 站文件名恒合集标题）
+    if (!name || name === currentLesson) return;
     const rank = SRC_RANK[src] || 0;
     const curRank = SRC_RANK[currentLessonSrc] || 0;
     if (currentLesson && rank < curRank) {
@@ -859,6 +873,7 @@
       hasPlayed = true;
       hasPlayedEver = true;
       endedLatchTs = 0; // 单段 ended 锁存解除（分片播放的分片间隙恢复，v2.3.1 同款语义）
+      endedSeen = false; // 重新在播：弹窗入口的"播完"前提失效（暂停期控制栏按钮不算）
       silenceSplitFired = false;
       pendingEntryAt = 0; // 播放恢复：入口可见信号作废（播放中浮现的贴片「跳过」类误报）
       if (state === "between") resumeCapture(); // 播放恢复：立即续录（不等 URL 稳定）
@@ -883,6 +898,7 @@
       }
     }
     if (data.ended) {
+      endedSeen = true; // 弹窗入口信号的"播完"前提（暂停时控制栏按钮可见但 ended 未到）
       // 分节模式：ended 不直接动作（分片播放每分片都触发，v2.3.1——由停播/入口
       // 判定驱动切段）。单段模式：ended 锁存（5s 内 playing 恢复会清锁存 = 分片
       // 假信号）→ 自动停止整场——playing 信号盲区站（路飞类 iframe）的播完通道。
@@ -988,6 +1004,12 @@
   function entryVisibleCheck() {
     if (state !== "recording" || mode !== "segment") return;
     if (!pendingEntryAt) return;
+    if (!endedSeen) {
+      // 播完前提：暂停时播放器控制栏的「下一集」按钮也可见，但 ended 未到——
+      // 不是播完弹窗，不停录（否则暂停期间碎片循环）
+      pendingEntryAt = 0;
+      return;
+    }
     if (now() - pendingEntryAt < SEG.entryStableMs) return;
     pendingEntryAt = 0;
     if (cur && cur.bytes < SEG.idleDiscardBytes) return; // 段无实质内容（开录初期常驻元素首报）不停录
@@ -1024,6 +1046,10 @@
         }
         break;
       case "offscreen-stop": sendResponse(stopAll("manual")); break;
+      case "offscreen-stop-discard":
+        // 停止不保存：丢弃当前未保存段（不 finalize），已落盘历史节保留
+        sendResponse(stopAll("discard", false, true));
+        break;
       case "offscreen-pause": sendResponse(pause()); break;
       case "offscreen-resume": sendResponse(resume()); break;
       case "offscreen-status": sendResponse(status()); break;

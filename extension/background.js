@@ -164,6 +164,10 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         sendResponse(await sendOffscreen({ type: "offscreen-stop" }).catch((e) => ({ ok: false, error: String(e) })));
         break;
       }
+      case "stop-discard": {
+        sendResponse(await sendOffscreen({ type: "offscreen-stop-discard" }).catch((e) => ({ ok: false, error: String(e) })));
+        break;
+      }
       case "pause":
       case "resume": {
         sendResponse(await sendOffscreen({ type: "offscreen-" + msg.type }).catch(() => ({})));

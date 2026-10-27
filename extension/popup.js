@@ -4,6 +4,7 @@ const $ = (id) => document.getElementById(id);
 const DEFAULT_SETTINGS = {
   format: "mp4", videoBitrate: 4000000, frameRate: 30, audioBitrate: 128000,
   startDelaySeconds: 0, autoNext: true, segUrlMode: false, silenceWrapSeconds: 60,
+  recordKind: "av",
   lessonSelector: "h1", lessonPrefix: "^正在播放[:：]\\s*",
 };
 
@@ -102,6 +103,27 @@ async function init() {
       if (presetMode === "custom") $("presetTime").focus();
     };
   });
+  // 录制内容三选（音视频/仅视频/仅音频——仅音频输出 webm）
+  $("kindChips").querySelectorAll(".chipBtn").forEach((btn) => {
+    btn.classList.toggle("active", btn.dataset.kind === (s.recordKind || "av"));
+    btn.onclick = async () => {
+      $("kindChips").querySelectorAll(".chipBtn").forEach((b) => b.classList.toggle("active", b === btn));
+      const cur = await loadSettings();
+      cur.recordKind = btn.dataset.kind;
+      await chrome.storage.local.set({ settings: cur });
+    };
+  });
+  // 高级设置（v1 默认值：4Mbps / 30fps / 128kbps）
+  $("videoBitrate").value = (s.videoBitrate || 4000000) / 1e6;
+  $("frameRate").value = s.frameRate || 30;
+  $("audioBitrate").value = s.audioBitrate || 128000;
+  for (const [id, key, mul] of [["videoBitrate", "videoBitrate", 1e6], ["frameRate", "frameRate", 1], ["audioBitrate", "audioBitrate", 1]]) {
+    $(id).onchange = async () => {
+      const cur = await loadSettings();
+      cur[key] = Math.max(1, Number($(id).value) || 0) * mul;
+      await chrome.storage.local.set({ settings: cur });
+    };
+  }
 
   $("startBtn").onclick = startRecording;
   $("cropPickBtn").onclick = pickCropRegion;
@@ -117,6 +139,26 @@ async function init() {
   $("stopBtn").onclick = async () => {
     $("stopBtn").disabled = true;
     await chrome.runtime.sendMessage({ type: "stop" }).catch(() => {});
+    pollSoon(300);
+  };
+  // 停止不保存：二次确认（点击变「确认丢弃？」3 秒未点恢复）——误触直接丢整段不可接受
+  let discardArmed = 0;
+  $("discardBtn").onclick = async () => {
+    const btn = $("discardBtn");
+    if (!discardArmed) {
+      discardArmed = setTimeout(() => {
+        discardArmed = 0;
+        btn.textContent = "停止不保存";
+        btn.classList.remove("armed");
+      }, 3000);
+      btn.textContent = "确认丢弃？";
+      btn.classList.add("armed");
+      return;
+    }
+    clearTimeout(discardArmed);
+    discardArmed = 0;
+    btn.disabled = true;
+    await chrome.runtime.sendMessage({ type: "stop-discard" }).catch(() => {});
     pollSoon(300);
   };
   $("pauseBtn").onclick = async () => {
