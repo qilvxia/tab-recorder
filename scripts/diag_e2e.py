@@ -14,7 +14,7 @@ import subprocess
 import time
 import urllib.request
 
-CHROME_CFT = "E:/ZCodeProjects/tab-recorder/.cft/chrome-win64/chrome.exe"
+CHROME_CFT = "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"  # CfT 已删，Edge 承担端到端
 EXT = "E:/ZCodeProjects/tab-recorder/extension"
 PORT = 9251
 PROFILE = "E:/ZCodeProjects/tab-recorder/.diag-profile"

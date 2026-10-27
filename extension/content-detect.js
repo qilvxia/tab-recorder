@@ -196,15 +196,26 @@
   }
 
   const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
+  // 杂音特征：加载/异常页的拼接文案与目录统计（连播跳转窗口实测「返回 QAQ…共0个
+  // 课时…课程大纲」恰好 78 字通过长度校验）——含这些特征的值直接丢弃，等页面
+  // 加载完成后的真名。通用防护，非站点特判。
+  const NOISE_PATTERNS = [
+    /-{2,}|—{2,}|~{2,}/,              // 连续分隔符堆叠：多段拼接文案特征
+    /\d+\s*个(课时|课程|视频|节)/,      // 目录统计（共 N 个课时）
+    /已学习|总时长|课程大纲|正在加载|请稍后|加载中/,
+  ];
   const okName = (t) => {
     const s = clean(t);
-    return s.length >= 2 && s.length <= 80 && !isJunk(s) ? s : "";
+    if (!(s.length >= 2 && s.length <= 80) || isJunk(s)) return "";
+    if (NOISE_PATTERNS.some((re) => re.test(s))) return "";
+    return s;
   };
 
   // 通用界面词不算课时名（目录高亮启发式的误抓防护）
   const GENERIC_WORDS = new Set([
     "首页", "课程", "目录", "简介", "评论", "下载", "分享", "全屏", "播放", "暂停",
     "笔记", "问答", "资料", "讨论", "公告", "讲义", "习题", "测试", "考试", "更多",
+    "课程大纲", "大纲", "返回", "上一节", "下一节",
   ]);
 
   function report() {
@@ -258,6 +269,10 @@
       for (const el of els) {
         if (!visible(el)) continue;
         if (el.closest("nav,header,footer")) continue; // 导航/页眉页脚里的高亮不是课时
+        // 播放器控件黑名单：清晰度/倍速/选集菜单的"当前项"也带 active 高亮
+        //（B 站实测 bpx-player-ctrl-quality-menu-item bpx-state-active 文本
+        // "自动(360P 流畅)"，可见时抢在分集列表前返回错值）——控件容器不是课时
+        if (el.closest('[class*="ctrl" i],[class*="control" i],[class*="menu" i],[role="menu"]')) continue;
         // 命中项优先取内部标题子元素——分集/目录列表项常为「序号+标题+时长」混排
         //（B 站列表项整项 innerText="01. xxx 05:20"，.title-txt 才是纯集名；
         // YouTube 列表项是 span#video-title——class 或 id 含 title 都认）

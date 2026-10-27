@@ -420,6 +420,7 @@
     lastUrlChangeAt = 0;
     pendingLesson = "";
     pendingLessonAt = 0;
+    pendingLowerRank = null;
     lastSilenceSplitAt = 0;
     segStartAt = 0;
     segLessonAtStart = "";
@@ -764,6 +765,22 @@
   }
 
   // ---- 信号处理 ----
+  // 多源竞争的两个修正语义（B 站实测驱动，路飞时序已推演兼容）：
+  // ① 升级改写相关性前提：高 rank 值与已立段名互不包含（两个源在说不同的事，
+  //    B 站 mediasession=合集总标题 vs active-item=分集名）→ 不改写段名——rank
+  //    高不代表粒度细；有包含关系（路飞 doc-title 剥尾巴≈mediasession 课时名）
+  //    才是同一内容的识别收敛，正常改写。
+  // ② 降级挂起稳定接管：高 rank 源的值可能不随内容变化（B 站 mediasession 恒为
+  //    合集标题），永久压制会变化的低 rank 分集名——降级值挂起观察，稳定 2s 且
+  //    高 rank 值未变（变化会走正常路径并清挂起）→ 高 rank 源不反映内容粒度，
+  //    接管命名（src 一并切换，高 rank 后续真变化仍可升级夺回）。
+  let pendingLowerRank = null; // {name, src, at}
+
+  const nameRelated = (a, b) => {
+    const x = String(a || "").replace(/\s+/g, ""), y = String(b || "").replace(/\s+/g, "");
+    return !x || !y || x === y || x.includes(y) || y.includes(x);
+  };
+
   function onContent(data) {
     if (!data) return;
     if (data.lesson) {
@@ -773,9 +790,21 @@
         const rank = SRC_RANK[src] || 0;
         const curRank = SRC_RANK[currentLessonSrc] || 0;
         if (currentLesson && rank < curRank) {
-          // 来源降级（如播完弹窗期媒体元数据被清、跌到页面标题）：忽略，保持原值
+          // 来源降级：挂起观察（见函数头②）——稳定 2s 且高 rank 未变则接管
+          if (pendingLowerRank && pendingLowerRank.name === name && pendingLowerRank.src === src) {
+            if (now() - pendingLowerRank.at >= 2000) {
+              console.info("[rec] 降级源稳定接管（高 rank 值未随内容变化）:", src, name);
+              pendingLowerRank = null;
+              currentLesson = name;
+              currentLessonSrc = src;
+              if (cur && cur.name !== name) cur.name = name;
+            }
+          } else {
+            pendingLowerRank = { name, src, at: now() };
+          }
           return;
         }
+        pendingLowerRank = null; // 正常路径到达 = 高 rank 值在变化，撤降级挂起
         // 来源升级仅限「识别源非空且优先级更高」。切段后 src 被清空，若空源也算
         // 升级，下一节首个上报就会误判升级并改写已有段名——合并段被命名成下一节
         // 的根因。空源 = 首次识别/重识别：只补空段名，不动已有段名。
@@ -783,7 +812,8 @@
         currentLesson = name;
         currentLessonSrc = src;
         if (state === "recording" && mode === "segment") {
-          if (cur && (!cur.name || isSourceUpgrade)) cur.name = name; // 未知段名补写 / 来源升级改写
+          // 升级改写加相关性前提（见函数头①）：无关值不覆盖已立段名
+          if (cur && (!cur.name || (isSourceUpgrade && nameRelated(cur.name, name)))) cur.name = name;
           if (isSourceUpgrade) {
             console.info("[rec] 识别来源升级:", src, name); // 识别收敛，不切节
           } else if (cur) {
@@ -792,6 +822,8 @@
             pendingLessonAt = now();
           }
         }
+      } else if (name && name === currentLesson) {
+        pendingLowerRank = null; // 降级源回到与当前同名，撤挂起
       }
     }
     if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);

@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
 """B 站多 P 页面课时名级联诊断：打开多 P 视频页，CDP 在页面上下文采样
-resolveLessonName 各源的原始输出与 ACTIVE_SEL 命中清单，回答
+resolveLessonName 各源的原始输出与 ACTIVE_SELS 逐选择器命中清单，回答
 「active-item 为什么没识别到 B 站分集列表」。
 
-用法：python scripts/diag_bili.py [视频URL]
+用法：python scripts/diag_bili.py [视频URL] [--edge]
+（默认 CfT 131——本体已删，需先重新下载；--edge 用本机 Edge，B 站诊断推荐）
 """
 import json
 import shutil
@@ -13,6 +14,7 @@ import time
 import urllib.request
 
 CHROME_CFT = "E:/ZCodeProjects/tab-recorder/.cft/chrome-win64/chrome.exe"
+EDGE = "C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe"
 PORT = 9253
 PROFILE = "E:/ZCodeProjects/tab-recorder/.diag-bili-profile"
 DEFAULT_URL = "https://www.bilibili.com/video/BV15j411H7Zc/"
@@ -23,21 +25,48 @@ PROBE_JS = r"""(() => {
   const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
   const isJunk = (s) => !s || /^[0-9a-f]{20,}$/i.test(s) || /^\d{10,}$/.test(s);
   const okName = (t) => { const s = clean(t); return s.length >= 2 && s.length <= 80 && !isJunk(s) ? s : ""; };
-  const GENERIC = new Set(["首页","课程","目录","简介","评论","下载","分享","全屏","播放","暂停","笔记","问答","资料","讨论","公告","讲义","习题","测试","考试","更多"]);
+  const GENERIC = new Set(["首页","课程","目录","简介","评论","下载","分享","全屏","播放","暂停","笔记","问答","资料","讨论","公告","讲义","习题","测试","考试","更多","课程大纲","大纲","返回","上一节","下一节"]);
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
 
-  const ACTIVE_SEL = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class*="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[selected]','[aria-selected="true" i]','[class*="active" i]'].join(",");
-  let activeHits = [];
-  try {
-    activeHits = [...document.querySelectorAll(ACTIVE_SEL)].slice(0, 14).map((el) => ({
-      cls: String(el.className).slice(0, 70),
-      text: clean(el.innerText || el.textContent || "").slice(0, 50),
-      okName: okName(el.innerText || el.textContent),
-      generic: GENERIC.has(clean(el.innerText || el.textContent)),
-      visible: visible(el),
-      inNav: !!el.closest("nav,header,footer"),
-    }));
-  } catch (e) { activeHits = [{ err: String(e) }]; }
+  // 逐选择器采样（镜像 v2.5.4 ACTIVE_SELS 优先级逐个查询）：每级列出前 5 个命中的
+  // class/文本/校验四元组——直接看到「哪一级返回了什么」，断点即现
+  const ACTIVE_SELS = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class*="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[class*="active" i]','[selected]:not(option)','[aria-selected="true" i]:not(option)'];
+  const perSel = [];
+  for (const sel of ACTIVE_SELS) {
+    let hits = [];
+    try {
+      hits = [...document.querySelectorAll(sel)].slice(0, 5).map((el) => ({
+        cls: String(el.className).slice(0, 60),
+        text: clean(el.innerText || el.textContent || "").slice(0, 40),
+        ok: !!okName(el.innerText || el.textContent),
+        vis: visible(el),
+        nav: !!el.closest("nav,header,footer"),
+      }));
+    } catch (e) { hits = [{ err: String(e).slice(0, 60) }]; }
+    if (hits.length) perSel.push({ sel, hits });
+  }
+
+  // 逐选择器版 pickActiveListItem 模拟（与当前实现一致：含 title 子元素优先 + 播放器控件黑名单）
+  const simNewLogic = (() => {
+    for (const sel of ACTIVE_SELS) {
+      let els; try { els = document.querySelectorAll(sel); } catch (e) { continue; }
+      for (const el of els) {
+        if (!visible(el)) continue;
+        if (el.closest("nav,header,footer")) continue;
+        if (el.closest('[class*="ctrl" i],[class*="control" i],[class*="menu" i],[role="menu"]')) continue;
+        for (const t of el.querySelectorAll("[class*='title' i],[id*='title' i]")) {
+          const s = okName(t.textContent);
+          if (s && !GENERIC.has(s)) return { via: sel + " >title", val: s };
+        }
+        let t = okName(el.innerText || el.textContent);
+        if (t) {
+          t = clean(t.replace(/\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*$/, ""));
+          if (t.length >= 2 && !GENERIC.has(t)) return { via: sel, val: t };
+        }
+      }
+    }
+    return { via: "none", val: "" };
+  })();
 
   let nearVideo = [];
   try {
@@ -57,6 +86,12 @@ PROBE_JS = r"""(() => {
   let msTitle = "";
   try { msTitle = (navigator.mediaSession && navigator.mediaSession.metadata && navigator.mediaSession.metadata.title) || ""; } catch (e) {}
 
+  // 祖先链采样：分集项与播放器高亮控件的 closest class 链（验证控件黑名单不误伤）
+  const ancChain = (el) => { let out = []; let p = el; for (let i = 0; i < 8 && p && p !== document.body; i++) { out.push(String(p.className).slice(0, 30)); p = p.parentElement; } return out; };
+  const ancestors = {};
+  try { const a = document.querySelector(".video-pod__item.active"); if (a) ancestors.podItem = ancChain(a); } catch (e) {}
+  try { const q = document.querySelector(".bpx-player-ctrl-quality-menu-item.bpx-state-active, [class*='ctrl-quality']"); if (q) ancestors.qualityItem = ancChain(q); } catch (e) {}
+
   return JSON.stringify({
     url: location.href,
     docTitle: document.title,
@@ -65,26 +100,10 @@ PROBE_JS = r"""(() => {
     biliActiveTitleTxt: clean((document.querySelector(".video-pod__item.active .title-txt") || {}).textContent || "(NOT FOUND)"),
     biliActiveFullText: clean((document.querySelector(".video-pod__item.active") || {}).innerText || "(NOT FOUND)").slice(0, 60),
     ytSelectedTitle: clean((document.querySelector("ytd-playlist-panel-video-renderer[selected] #video-title") || {}).textContent || "(NOT FOUND)"),
-    // 修复后 pickActiveListItem 的模拟：首个可见 active 命中 → 内部 title 子元素优先 → 整项剥尾部时长兜底
-    simNewLogic: (() => {
-      const els = document.querySelectorAll(ACTIVE_SEL);
-      for (const el of els) {
-        if (!visible(el)) continue;
-        if (el.closest("nav,header,footer")) continue;
-        for (const t of el.querySelectorAll("[class*='title' i]")) {
-          const s = okName(t.textContent);
-          if (s && !GENERIC.has(s)) return { via: "title-child", val: s };
-        }
-        let t = okName(el.innerText || el.textContent);
-        if (t) {
-          t = clean(t.replace(/\\s*\\d{1,2}:\\d{2}(?::\\d{2})?\\s*$/, ""));
-          if (t.length >= 2 && !GENERIC.has(t)) return { via: "whole-trimmed", val: t };
-        }
-      }
-      return { via: "none", val: "" };
-    })(),
+    simNewLogic,
     nearVideo,
-    activeHits,
+    perSel,
+    ancestors,
   });
 })()"""
 
@@ -121,11 +140,18 @@ def main():
     global websocket
     import websocket
 
-    url = sys.argv[1] if len(sys.argv) > 1 else DEFAULT_URL
+    argv = [a for a in sys.argv[1:]]
+    use_edge = "--edge" in argv
+    if use_edge:
+        argv.remove("--edge")
+    url = argv[0] if argv else DEFAULT_URL
     host = urllib.request.urlparse(url).hostname or ""
-    # 外网站点（youtube.com 等）走本机代理；bilibili.com 在直连白名单外也代理可达
+    browser = EDGE if use_edge else CHROME_CFT
+    if not use_edge and not shutil.which(browser):
+        raise SystemExit("CfT 131 本体已删（需要时重新下载），加 --edge 用本机 Edge")
+    # 外网站点（youtube.com 等）走本机代理；bilibili.com 直连不受影响
     args = [
-        CHROME_CFT, "--remote-debugging-port=%d" % PORT,
+        browser, "--remote-debugging-port=%d" % PORT,
         "--user-data-dir=" + PROFILE,
         "--window-size=1400,900", "--window-position=20,20",
         "--no-first-run", "--no-default-browser-check",
