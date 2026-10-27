@@ -26,6 +26,11 @@
       <label style="margin-top:6px;"><input type="checkbox" id="segUrlMode"> 网址一变就切下一节（B 站多 P 等同页换集的网站勾选；不勾 = 按页面课时名智能切节）</label>
     </div>
 
+    <div id="fileRow" class="row hidden">
+      <label>录制文件名（可选）</label>
+      <input id="fileNameInput" type="text" placeholder="留空 = 自动命名（识别标题或时间戳）">
+    </div>
+
     <div class="row">
       <label>录制区域</label>
       <div class="chips">
@@ -33,6 +38,20 @@
         <button class="chipBtn" id="cropPickBtn">框选区域…</button>
         <button class="chipBtn hidden" id="cropClearBtn">清除</button>
       </div>
+    </div>
+
+    <div class="row">
+      <label>定时停止</label>
+      <div class="chips" id="presetChips">
+        <button class="chipBtn active" data-mode="off">不限</button>
+        <button class="chipBtn" data-mode="custom">自定义</button>
+      </div>
+      <input id="presetTime" type="text" class="hidden" placeholder="00:00:00（时:分:秒）" style="margin-top:6px;">
+    </div>
+
+    <div id="wrapRow" class="row hidden">
+      <label>无播放自动收工（秒，0 = 不自动收工）</label>
+      <input id="silenceWrap" type="number" min="0" max="600" step="1" value="60">
     </div>
 
     <div class="row">

@@ -3,7 +3,7 @@ const $ = (id) => document.getElementById(id);
 
 const DEFAULT_SETTINGS = {
   format: "mp4", videoBitrate: 4000000, frameRate: 30, audioBitrate: 128000,
-  startDelaySeconds: 0, autoNext: true, segUrlMode: false,
+  startDelaySeconds: 0, autoNext: true, segUrlMode: false, silenceWrapSeconds: 60,
   lessonSelector: "h1", lessonPrefix: "^正在播放[:：]\\s*",
 };
 
@@ -19,6 +19,16 @@ const SRC_LABEL = {
 let tabInfo = null;
 let pollTimer = null;
 let uiMode = "single"; // single | segment
+let presetMode = "off"; // off | custom
+
+// 00:00:00（时:分:秒）→ 秒；非法返回 -1
+function parseDuration(s) {
+  const m = /^(\d{1,2}):(\d{1,2}):(\d{1,2})$/.exec(String(s || "").trim());
+  if (!m) return -1;
+  const h = +m[1], mi = +m[2], se = +m[3];
+  if (mi > 59 || se > 59) return -1;
+  return h * 3600 + mi * 60 + se;
+}
 
 function fmtDur(ms) {
   const s = Math.max(0, Math.floor(ms / 1000));
@@ -75,6 +85,23 @@ async function init() {
     cur.segUrlMode = $("segUrlMode").checked;
     await chrome.storage.local.set({ settings: cur });
   };
+  $("silenceWrap").value = Math.min(600, Math.max(0, Number(s.silenceWrapSeconds ?? 60) || 0));
+  $("silenceWrap").onchange = async () => {
+    const v = Math.min(600, Math.max(0, Math.round(Number($("silenceWrap").value) || 0)));
+    $("silenceWrap").value = v;
+    const cur = await loadSettings();
+    cur.silenceWrapSeconds = v;
+    await chrome.storage.local.set({ settings: cur });
+  };
+  // 定时停止 chips：不限 / 自定义（00:00:00）
+  $("presetChips").querySelectorAll(".chipBtn").forEach((btn) => {
+    btn.onclick = () => {
+      presetMode = btn.dataset.mode;
+      $("presetChips").querySelectorAll(".chipBtn").forEach((b) => b.classList.toggle("active", b === btn));
+      $("presetTime").classList.toggle("hidden", presetMode !== "custom");
+      if (presetMode === "custom") $("presetTime").focus();
+    };
+  });
 
   $("startBtn").onclick = startRecording;
   $("cropPickBtn").onclick = pickCropRegion;
@@ -105,6 +132,8 @@ function setMode(m) {
   $("modeSingle").classList.toggle("active", m === "single");
   $("modeSegment").classList.toggle("active", m === "segment");
   $("courseRow").classList.toggle("hidden", m !== "segment");
+  $("fileRow").classList.toggle("hidden", m !== "single");
+  $("wrapRow").classList.toggle("hidden", m !== "segment");
 }
 
 // ---- 录制区域（会话级：绑定标签页，跨录制保留；换 tab 失效） ----
@@ -140,10 +169,20 @@ async function startRecording() {
     showErr("浏览器内置页面（chrome:// 等）无法录制，请切到普通网页。");
     return;
   }
+  let presetSeconds = 0;
+  if (presetMode === "custom") {
+    presetSeconds = parseDuration($("presetTime").value);
+    if (!(presetSeconds > 0)) {
+      showErr("自定义时长格式应为 00:00:00（时:分:秒），且不能为 0。");
+      return;
+    }
+  }
   const settings = await loadSettings();
   const payload = {
     mode: uiMode,
     courseFolder: uiMode === "segment" ? $("courseFolder").value.trim() : "",
+    fileName: uiMode === "single" ? $("fileNameInput").value.trim() : "",
+    presetSeconds,
     startDelaySeconds: Math.min(60, Math.max(0, Number($("startDelay").value) || 0)),
     tabTitle: tabInfo.title,
     tabUrl: tabInfo.url,

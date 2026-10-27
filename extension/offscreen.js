@@ -66,8 +66,12 @@
   let resumeAfterBetween = false; // 点击成功触发的停录：between 就绪后立即续录（跳转加载期连续录，新节零丢失）
   let lastSplitInfo = null; // {reason, at}——切节原因（面板临时显示，诊断用）
   let lastPlayingTs = 0; // 最近一次"页面有视频在播"的上报时刻
-  let hasPlayed = false; // 本场录制是否出现过播放（停播静默判定的启用开关）
+  let hasPlayed = false; // 本场录制是否出现过播放（停播静默判定的启用开关；between 重置=恢复后重新收敛）
+  let hasPlayedEver = false; // 本场是否**曾经**收到过 playing（between 不重置）——
+  //   playing 盲区站（路飞 hasPlayedEver 恒 false）据此豁免自动收工，防误伤
   let lastAdvanceBroadcast = 0; // 最近一次连播广播时刻（定时兜底用）
+  let endedLatchTs = 0; // 单段模式 ended 事件锁存时刻（5s 无 playing 恢复 = 真播完）
+  let endedStopFired = false; // 单段 ended 停止一次性锁（停过不再重复触发）
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -142,20 +146,21 @@
   }
 
   function buildSegName(seg) {
+    const seq2 = String(seg.seq).padStart(2, "0");
+    if (mode === "single") {
+      // 单段优先级：手填文件名 > 识别标题 > 时间戳（v1 语义；不做模板变量）
+      const manual = sanitize(payload.fileName || "", 120);
+      if (manual) return manual;
+      const lesson = sanitize(stripLessonPrefix(seg.name));
+      if (lesson && !isJunkName(lesson)) return lesson;
+      const d = new Date();
+      const p2 = (v) => String(v).padStart(2, "0");
+      return `录制_${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
+    }
     const prefix = sanitize(courseFolder, 40);
     const lesson = sanitize(stripLessonPrefix(seg.name));
     const base = lesson && !isJunkName(lesson) ? lesson : `第${seg.seq}节`;
-    const seq2 = String(seg.seq).padStart(2, "0");
     return prefix ? `${prefix}_${seq2}-${base}` : `${seq2}-${base}`;
-  }
-
-  function buildSingleName() {
-    const d = new Date();
-    const p2 = (v) => String(v).padStart(2, "0");
-    const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}-${p2(d.getHours())}${p2(d.getMinutes())}${p2(d.getSeconds())}`;
-    const lesson = sanitize(stripLessonPrefix(currentLesson));
-    if (lesson && !isJunkName(lesson)) return lesson;
-    return `录制_${stamp}`;
   }
 
   const segActiveMs = () => activeBaseSeg + (resumeTs ? now() - resumeTs : 0);
@@ -430,7 +435,10 @@
     lastSplitInfo = null;
     lastPlayingTs = 0;
     hasPlayed = false;
+    hasPlayedEver = false;
     lastAdvanceBroadcast = 0;
+    endedLatchTs = 0;
+    endedStopFired = false;
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
                          // 导致全局闸从开录起失效——开录静默误切段、占闸挤掉真播完信号）
     silenceSplitFired = false;
@@ -479,13 +487,21 @@
 
   function stopAll(reason, keepOffscreen) {
     if (state === "stopping" || state === "idle") return { ok: true };
+    // 自动停止类原因面板可见（复验免开 F12 一击定位；manual 等不占"切节"语义）
+    if (["video-stopped", "video-ended", "preset", "idle-wrap"].includes(reason)) {
+      lastSplitInfo = { reason, at: now() };
+    }
     if (countdownTimer) { clearInterval(countdownTimer); countdownTimer = null; }
     if (state === "between") {
-      // 节间等待中手动停止：无未保存内容，干净结束整场
+      // 节间等待中停止（手动/定时到点/收工）：已录节全部落盘，正常收尾上报
+      //（原 cancelled:true 会丢失"已保存 N 节"信息）
       state = "idle";
       stopLoops();
       updateBadge();
-      chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
+      chrome.runtime.sendMessage({
+        type: "recording-finished",
+        summary: { mode, segments: segmentsDone, last: anchorName },
+      }).catch(() => {});
       return { ok: true };
     }
     if (state === "countdown" && !captureRequested) {
@@ -838,6 +854,8 @@
       // 任一帧有视频在播：刷新"最后在播"时刻（停播静默判定的基准）
       lastPlayingTs = now();
       hasPlayed = true;
+      hasPlayedEver = true;
+      endedLatchTs = 0; // 单段 ended 锁存解除（分片播放的分片间隙恢复，v2.3.1 同款语义）
       silenceSplitFired = false;
       pendingEntryAt = 0; // 播放恢复：入口可见信号作废（播放中浮现的贴片「跳过」类误报）
       if (state === "between") resumeCapture(); // 播放恢复：立即续录（不等 URL 稳定）
@@ -862,10 +880,10 @@
       }
     }
     if (data.ended) {
-      // 播完信号挂起：不立即停录——加密播放器（分片播放）的每个分片结束都会触发
-      // ended，直接停录会把一节课切成碎片段。统一交给停播判定：视频 5 秒内恢复
-      // 播放 = 分片假信号（计数重置不切）；持续无播放 ≥5 秒 = 真播完 → 停录保存
-      // + 广播连播（stoppedPlayingCheck 驱动）。ended 本身不再产生切节。
+      // 分节模式：ended 不直接动作（分片播放每分片都触发，v2.3.1——由停播/入口
+      // 判定驱动切段）。单段模式：ended 锁存（5s 内 playing 恢复会清锁存 = 分片
+      // 假信号）→ 自动停止整场——playing 信号盲区站（路飞类 iframe）的播完通道。
+      if (mode === "single") endedLatchTs = now();
     }
   }
 
@@ -909,14 +927,56 @@
   // 语义比音频/audible 更准：切节的本意就是"内容播完了"。曾播过（hasPlayed）才启用，
   // 开录初期未点播放时不会误切。
   function stoppedPlayingCheck() {
-    if (state !== "recording" || mode !== "segment") return;
+    if (state !== "recording") return;
     if (!hasPlayed) return; // 本场还没播过任何内容
     if (!(lastPlayingTs > segStartAt)) return; // 本段开始后未观察到过播放（重注入延迟期不启用）
     if (now() - lastPlayingTs < SEG.silenceSec * 1000) return;
+    if (mode === "single") {
+      // 单段模式：停播 5s = 视频播完/页面静止 → 结束整场（双通道之一，信号可见站）
+      stopAll("video-stopped");
+      return;
+    }
+    if (mode !== "segment") return;
     if (silenceSplitFired || now() - lastSilenceSplitAt < SEG.silenceGapMs) return;
     silenceSplitFired = true;
     lastSilenceSplitAt = now();
     finishSegmentForAdvance("advance-pause");
+  }
+
+  // 单段 ended 锁存停止：playing 盲区站（路飞类 iframe）的播完通道——ended 事件
+  // 锁存 5s，分片间隙的 playing 恢复会清锁存（分片假信号不误停，v2.3.1 同款语义）
+  function singleEndedCheck() {
+    if (mode !== "single" || state !== "recording") return;
+    if (!endedLatchTs || endedStopFired) return;
+    if (now() - endedLatchTs < SEG.silenceSec * 1000) return;
+    endedStopFired = true;
+    stopAll("video-ended");
+  }
+
+  // 定时停止：有效录制时长（暂停/节间不计入）达到预设 → 结束整场（各状态通吃：
+  // recording 停录保存当前段；between 干净结束——已录节全保留）
+  function presetTimeCheck() {
+    const presetSec = Number(payload.presetSeconds) > 0 ? Number(payload.presetSeconds) : 0;
+    if (!presetSec) return;
+    if (state !== "recording" && state !== "between") return;
+    if (totalActiveMs() >= presetSec * 1000) stopAll("preset");
+  }
+
+  // 分节静默收工：连播全部失效（课程放完/站点连播挂）时补 between 循环永不结束
+  // 的缺口——恢复续录后持续无播放（lastPlayingTs < resumeTs = 续录以来页面从未
+  // 在播）超过阈值 → 结束整场。hasPlayed 门槛天然豁免 playing 盲区站（路飞：
+  // hasPlayed 恒 false，收工判定不启用——其连播工作良好，挂了用户手点停止）。
+  function idleWrapCheck() {
+    const wrapSec = Number(settings.silenceWrapSeconds) > 0 ? Number(settings.silenceWrapSeconds) : 0;
+    if (!wrapSec || mode !== "segment" || state !== "recording") return;
+    // 豁免判定用 hasPlayedEver（曾收到过 playing）：playing 盲区站（路飞，恒 false）
+    // 不启用收工——其连播工作良好，挂了用户手点停止。不用 hasPlayed——它在进
+    // between 时被重置（恢复后重新收敛），恢复段永远 hasPlayed=false 会让收工
+    // 判定永不启用（e2e 实测抓到的缺陷）
+    if (!resumeTs || !hasPlayedEver) return;
+    if (lastPlayingTs >= resumeTs) return; // 续录后见过播放（连播成功/误报恢复），不收工
+    if (now() - resumeTs < wrapSec * 1000) return;
+    stopAll("idle-wrap");
   }
 
   // 连播入口可见确认：播完弹窗类入口持续可见 → 内容已播完 → 停录进节间。
@@ -935,6 +995,9 @@
   function tick() {
     updateBadge();
     if (state === "stopping") { maybeFinish(); return; }
+    presetTimeCheck();
+    singleEndedCheck();
+    idleWrapCheck();
     stoppedPlayingCheck();
     entryVisibleCheck();
     checkPendingSplits();

@@ -11,6 +11,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import time
 import urllib.request
 
@@ -161,25 +162,32 @@ def main():
         pc.cmd("Runtime.enable")
         pc.cmd("Runtime.evaluate", {"expression": "window.__clicked=0"})
 
-        # 配置 + 启动真录制（segment 模式）
-        sw.eval("chrome.tabs.sendMessage(%d, {type:'detect-config', cfg:{lessonSelector:'h1', lessonPrefix:'', autoNext:true}}).catch(()=>{})" % tab_id)
-        sw.eval("chrome.storage.session.set({recording:true, tabId:%d, mode:'segment'})" % tab_id)
+        # 配置 + 启动真录制（--single 走单段模式验证播完自动停/手填文件名）
+        single = "--single" in sys.argv
+        mode = "single" if single else "segment"
+        auton = "false" if single else "true"
+        sw.eval("chrome.tabs.sendMessage(%d, {type:'detect-config', cfg:{lessonSelector:'h1', lessonPrefix:'', autoNext:%s}}).catch(()=>{})" % (tab_id, auton))
+        sw.eval("chrome.storage.session.set({recording:true, tabId:%d, mode:'%s'})" % (tab_id, mode))
         sw.eval(
             "chrome.offscreen.createDocument({url:'offscreen.html',reasons:['USER_MEDIA'],justification:'e2e'}).catch(()=>{})",
             await_promise=True)
         time.sleep(1.5)
+        payload_js = ("payload:{mode:'single',fileName:'单段诊断',presetSeconds:%d,startDelaySeconds:0,tabTitle:'e2e',tabUrl:''}"
+                      % (20 if "--preset" in sys.argv else 0)
+                      if single else
+                      "payload:{mode:'segment',courseFolder:'e2e',startDelaySeconds:0,tabTitle:'e2e',tabUrl:''}")
         resp = sw.eval(
             "(async()=>{"
             "  const sid = await new Promise((res,rej)=>chrome.tabCapture.getMediaStreamId({targetTabId:%d},(id)=>{"
             "    const e=chrome.runtime.lastError; (e||!id)?rej(new Error(e?e.message:'no id')):res(id);}));"
             "  return await chrome.runtime.sendMessage({type:'offscreen-schedule', streamId:sid,"
-            "    settings:{format:'mp4',videoBitrate:2000000,frameRate:15,audioBitrate:96000,autoNext:true,lessonSelector:'h1',lessonPrefix:''},"
-            "    payload:{mode:'segment',courseFolder:'e2e',startDelaySeconds:0,tabTitle:'e2e',tabUrl:''}, tabId:%d});"
-            "})()" % (tab_id, tab_id), await_promise=True)
+            "    settings:{format:'mp4',videoBitrate:2000000,frameRate:15,audioBitrate:96000,autoNext:%s,silenceWrapSeconds:15,lessonSelector:'h1',lessonPrefix:''},"
+            "    %s, tabId:%d});"
+            "})()" % (tab_id, auton, payload_js, tab_id), await_promise=True)
         print("录制启动:", resp)
 
-        # 采样 150 秒（30s/节 × 3 节 + 停播确认与连播间隔）
-        for i in range(75):
+        # 采样：单段 50s（30s 播放 + 5s 停播/ended 锁存 + 收尾落盘）；分节 150s（30s×3 节）
+        for i in range(25 if single else 75):
             time.sleep(2)
             try:
                 st = sw.eval(
@@ -196,9 +204,14 @@ def main():
                 print("[%02ds] 采样异常: %s" % ((i + 1) * 2, str(e)[:120]))
 
         final_files = sw.eval(
-            "chrome.downloads.search({}).then(l=>JSON.stringify(l.filter(x=>x.filename.includes('e2e')).map(x=>({n:x.filename.split('\\\\').pop(), s:x.state, b:x.fileSize}))))",
+            "chrome.downloads.search({}).then(l=>JSON.stringify(l.map(x=>({n:x.filename.split('\\\\').pop(), s:x.state, b:x.bytesReceived, t:x.totalBytes}))))",
             await_promise=True)
-        print("最终落盘(含字节量，三节应接近≈30s×码率):", final_files)
+        print("最终落盘(全量下载列表):", final_files)
+        if single:
+            time.sleep(20)  # 单段收尾在采样截止后进行：等下载 complete 再确认一次
+            print("20s 后:", sw.eval(
+                "chrome.downloads.search({}).then(l=>JSON.stringify(l.map(x=>({n:x.filename.split('\\\\').pop(), s:x.state, b:x.bytesReceived}))))",
+                await_promise=True))
     finally:
         proc.kill()
 
