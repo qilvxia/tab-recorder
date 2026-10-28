@@ -46,6 +46,14 @@ async function loadSettings() {
   return Object.assign({}, DEFAULT_SETTINGS, st.settings || {});
 }
 
+async function saveSetting(key, value) {
+  const cur = await loadSettings();
+  cur[key] = value;
+  await chrome.storage.local.set({ settings: cur });
+}
+
+const isBrowserPage = (url) => !!(url && /^(chrome|edge|about|chrome-extension):/i.test(url));
+
 async function init() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   tabInfo = tab ? { id: tab.id, title: tab.title || "录制", url: tab.url || "" } : null;
@@ -57,9 +65,7 @@ async function init() {
   $("startDelay").onchange = async () => {
     const v = Math.min(60, Math.max(0, Math.round(Number($("startDelay").value) || 0)));
     $("startDelay").value = v;
-    const cur = await loadSettings();
-    cur.startDelaySeconds = v;
-    await chrome.storage.local.set({ settings: cur });
+    await saveSetting("startDelaySeconds", v);
   };
 
   const st = await chrome.runtime.sendMessage({ type: "status" }).catch(() => null);
@@ -76,23 +82,17 @@ async function init() {
   } catch (e) { $("courseFolder").value = ""; }
   $("autoNext").checked = s.autoNext !== false;
   $("autoNext").onchange = async () => {
-    const cur = await loadSettings();
-    cur.autoNext = $("autoNext").checked;
-    await chrome.storage.local.set({ settings: cur });
+    await saveSetting("autoNext", $("autoNext").checked);
   };
   $("segUrlMode").checked = s.segUrlMode === true;
   $("segUrlMode").onchange = async () => {
-    const cur = await loadSettings();
-    cur.segUrlMode = $("segUrlMode").checked;
-    await chrome.storage.local.set({ settings: cur });
+    await saveSetting("segUrlMode", $("segUrlMode").checked);
   };
   $("silenceWrap").value = Math.min(600, Math.max(0, Number(s.silenceWrapSeconds ?? 60) || 0));
   $("silenceWrap").onchange = async () => {
     const v = Math.min(600, Math.max(0, Math.round(Number($("silenceWrap").value) || 0)));
     $("silenceWrap").value = v;
-    const cur = await loadSettings();
-    cur.silenceWrapSeconds = v;
-    await chrome.storage.local.set({ settings: cur });
+    await saveSetting("silenceWrapSeconds", v);
   };
   // 定时停止 chips：不限 / 自定义（00:00:00）
   $("presetChips").querySelectorAll(".chipBtn").forEach((btn) => {
@@ -108,9 +108,7 @@ async function init() {
     btn.classList.toggle("active", btn.dataset.kind === (s.recordKind || "av"));
     btn.onclick = async () => {
       $("kindChips").querySelectorAll(".chipBtn").forEach((b) => b.classList.toggle("active", b === btn));
-      const cur = await loadSettings();
-      cur.recordKind = btn.dataset.kind;
-      await chrome.storage.local.set({ settings: cur });
+      await saveSetting("recordKind", btn.dataset.kind);
     };
   });
   // 高级设置（v1 默认值：4Mbps / 30fps / 128kbps）
@@ -119,9 +117,7 @@ async function init() {
   $("audioBitrate").value = s.audioBitrate || 128000;
   for (const [id, key, mul] of [["videoBitrate", "videoBitrate", 1e6], ["frameRate", "frameRate", 1], ["audioBitrate", "audioBitrate", 1]]) {
     $(id).onchange = async () => {
-      const cur = await loadSettings();
-      cur[key] = Math.max(1, Number($(id).value) || 0) * mul;
-      await chrome.storage.local.set({ settings: cur });
+      await saveSetting(key, Math.max(1, Number($(id).value) || 0) * mul);
     };
   }
 
@@ -193,7 +189,7 @@ async function refreshCropRow() {
 
 async function pickCropRegion() {
   if (!tabInfo || tabInfo.id == null) return;
-  if (tabInfo.url && /^(chrome|edge|about|chrome-extension):/i.test(tabInfo.url)) {
+  if (isBrowserPage(tabInfo.url)) {
     showErr("浏览器内置页面（chrome:// 等）无法注入选区浮层。");
     return;
   }
@@ -207,7 +203,7 @@ async function pickCropRegion() {
 
 async function startRecording() {
   if (!tabInfo || tabInfo.id == null) return;
-  if (tabInfo.url && /^(chrome|edge|about|chrome-extension):/i.test(tabInfo.url)) {
+  if (isBrowserPage(tabInfo.url)) {
     showErr("浏览器内置页面（chrome:// 等）无法录制，请切到普通网页。");
     return;
   }

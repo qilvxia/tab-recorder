@@ -108,6 +108,7 @@
   }
 
   stage.addEventListener("pointerdown", (e) => {
+    if (!e.isTrusted) return; // 合成事件不可作为选区确认依据
     if (e.target !== stage || e.button !== 0) return;
     stage.setPointerCapture(e.pointerId);
     drag = { x0: e.clientX, y0: e.clientY };
@@ -120,6 +121,7 @@
   stage.addEventListener("pointerup", () => { drag = null; });
 
   box.addEventListener("pointerdown", (e) => {
+    if (!e.isTrusted) return;
     // 框上按下=重新框选（从当前位置起拖可微调），双击=确认
     if (e.button !== 0) return;
     stage.setPointerCapture(e.pointerId);
@@ -166,6 +168,7 @@
   okBtn.addEventListener("click", confirm);
   root.querySelector(".op.cancel").addEventListener("click", teardown);
   document.addEventListener("keydown", (e) => {
+    if (!e.isTrusted) return;
     if (e.key === "Escape") teardown();
     else if (e.key === "Enter" && rect && rect.w >= MIN_W && rect.h >= MIN_H) confirm();
   }, true);

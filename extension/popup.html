@@ -22,8 +22,8 @@
     <div id="courseRow" class="row hidden">
       <label>课程名（用于文件名前缀）</label>
       <input id="courseFolder" type="text" placeholder="留空 = 自动命名">
-      <label style="margin-top:6px;"><input type="checkbox" id="autoNext" checked> 播完自动播放下一节（自动点击「下一节」或列表下一项）</label>
-      <label style="margin-top:6px;"><input type="checkbox" id="segUrlMode"> 网址一变就切下一节（B 站多 P 等同页换集的网站勾选；不勾 = 按页面课时名智能切节）</label>
+      <label class="gapTop"><input type="checkbox" id="autoNext" checked> 播完自动播放下一节（自动点击「下一节」或列表下一项）</label>
+      <label class="gapTop"><input type="checkbox" id="segUrlMode"> 网址一变就切下一节（B 站多 P 等同页换集的网站勾选；不勾 = 按页面课时名智能切节）</label>
     </div>
 
     <div id="fileRow" class="row hidden">
@@ -42,7 +42,7 @@
 
     <details id="advanced">
       <summary>高级设置</summary>
-      <div class="row" style="margin-top:6px;">
+      <div class="row gapTop">
         <label>视频码率（Mbps，默认 4）</label>
         <input id="videoBitrate" type="number" min="1" max="50" step="0.5" value="4">
       </div>
@@ -71,7 +71,7 @@
         <button class="chipBtn active" data-mode="off">不限</button>
         <button class="chipBtn" data-mode="custom">自定义</button>
       </div>
-      <input id="presetTime" type="text" class="hidden" placeholder="00:00:00（时:分:秒）" style="margin-top:6px;">
+      <input id="presetTime" type="text" class="hidden indent" placeholder="00:00:00（时:分:秒）">
     </div>
 
     <div id="wrapRow" class="row hidden">

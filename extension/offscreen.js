@@ -1,4 +1,6 @@
 // offscreen.js — 录制引擎：tabCapture 取流、音频回环、单段/自动分节、锚点直存
+// 错误处理约定：消息/异步链用 .catch()；content-detect 侧用 try/catch 包同步调用
+//（内容脚本上下文失效会同步抛，.catch 兜不住）。
 // 生命周期独立于 popup 和 service worker（USER_MEDIA reason 无时限）。
 
 (() => {
@@ -40,11 +42,16 @@
   const SEG = {
     debounceMs: 1500, silenceSec: 5,
     urlStableMs: 3000, // URL 变化需稳定这么久才切节：进度/token 类参数会持续变化，永不稳定→不切
+    urlInstantMinMs: 500, // URL 即刻切（segUrlMode）的最小等待：滤同帧抖动的瞬间变化
     silenceGapMs: 30000, // 两次静默切节的最小间隔（防 audible 抖动）
     minSplitGapMs: 10000, // 全局最小切节间隔：未到间隔时挂起信号保留重试（不丢弃）
     lessonStableMs: 2000, // 课时名同源变化需稳定这么久才切节（滤网络抖动；语义判定见下）
     entryStableMs: 3000, // 连播入口（播完弹窗）持续可见这么久才停录：滤动画/闪现误报
     betweenTimeoutMs: 30000, // 节间等待超时：无恢复信号也自动续录（入口误报/加载过慢兜底）
+    takeoverStableMs: 2000, // 降级识别源稳定这么久且高 rank 值未变 → 接管命名
+    stretchEpsilon: 0.01, // 帧纵横比与视口纵横比差超过此值 → 拉伸模型（横纵独立换算）
+    advanceFallbackMs: 45000, // 连播定时兜底广播间隔
+    finishDeadlineMs: 300000, // 大文件锚点落定上限 5 分钟
     idleDiscardBytes: 2 * 1024 * 1024, // 节间黑屏小段丢弃阈值（连播点击前弹窗期录到的部分）
     minLessonSplitBytes: 4 * 1024 * 1024, // lesson 切节前提：当前段 ≥ 此量（约 8 秒内容）才值得单独成文件，否则只改名并入后续
   };
@@ -57,6 +64,9 @@
   let lastUrlChangeAt = 0;
   let pendingLesson = "";
   let pendingLessonAt = 0;
+  let pendingStartAfterResume = false; // 切节收尾毫秒窗内恰好 pause：resume 后补开新段
+  let prevHighRank = null; // 降级接管时被替代的高 rank 值 {name,src}——恒值回归防护（M-e）
+  let entryDismissedAt = 0; // 入口挂起因"无 ended"被作废的时刻——ended 迟到时重臂（M-c）
   let lastSilenceSplitAt = 0;
   let segStartAt = 0; // 当前段开始时刻（lesson-change 的 URL 联动确认基准）
   let segLessonAtStart = ""; // 本段开始时的课时名快照（URL 切节的「课时名未变否决」基准）
@@ -83,6 +93,7 @@
   // 锚点保存对账（多段并发落定）
   let anchorName = ""; // 最近一段文件名（展示用）
   const pendingAnchors = new Set();
+  const anchorURLs = new Map(); // 文件名 → objectURL（anchor-landed 回执时 revoke）
   let finishDeadline = 0;
 
   // 捕获后移：倒计时期不取流（点开始瞬间几乎无动作，弹窗不会被顶掉），
@@ -116,10 +127,14 @@
   function sanitize(s, max = 120) {
     s = String(s || "")
       .replace(/[\\/:*?"<>|\x00-\x1f]/g, "")
+      .replace(/[\u202a-\u202e]/g, "") // RTL 覆盖/隔离符：视觉欺骗文件名（审计安全低项）
       .replace(/\s+/g, " ")
       .trim()
       .replace(/[. ]+$/, "");
-    return s.slice(0, max);
+    s = s.slice(0, max);
+    // Windows 保留设备名（CON/PRN/AUX/NUL/COM1../LPT1..）加前缀防整名失效
+    if (/^(CON|PRN|AUX|NUL|COM\d|LPT\d)(?=\.|$)/i.test(s)) s = "_" + s;
+    return s;
   }
 
   function stripLessonPrefix(raw) {
@@ -131,12 +146,20 @@
     }
   }
 
+  const NOISE_PATTERNS = [
+    /-{2,}|—{2,}|~{2,}/,              // 连续分隔符堆叠：多段拼接文案特征
+    /\d+\s*个(课时|课程|视频|节)/,      // 目录统计（共 N 个课时）
+    /已学习|总时长|课程大纲|正在加载|请稍后|加载中/,
+  ];
   function isJunkName(s) {
     const t = String(s || "").trim();
     if (!t) return true;
-    return /^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(t)
+    if (/^(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.test(t)
       || /^[0-9a-f]{20,}$/i.test(t)
-      || /^\d{10,}$/.test(t);
+      || /^\d{10,}$/.test(t)) return true;
+    // 杂音特征与 content-detect 的 okName 保持一致判定（审计 Q2——两侧已分叉：
+    // 文件名兜底也应拦「课程大纲/共N个课时」类加载文案）
+    return NOISE_PATTERNS.some((re) => re.test(t));
   }
 
   function pickMime(want) {
@@ -193,12 +216,15 @@
     //   diag_crop 验证）→ 等比换算 + letterbox 补偿。
     // 判定：帧纵横比 vs 视口纵横比差 ≥1%（非等比）→ 拉伸；否则黑边。
     // 最大化窗口时两模型等价（帧≈视口×dpr，letterbox≈0）。
-    const vp = (pendingPayload && pendingPayload.viewport && pendingPayload.viewport.w > 0)
+    const vpRaw = (pendingPayload && pendingPayload.viewport && pendingPayload.viewport.w > 0)
       ? pendingPayload.viewport
       : { w: crop.viewportW, h: crop.viewportH };
+    // 双基准均无效（w=0/undefined）时回退帧自身尺寸（scale=1 黑边模型）——
+    // 防 NaN 沿 Math.min/max 静默扩散（审计低项）
+    const vp = vpRaw.w > 0 && vpRaw.h > 0 ? vpRaw : { w: vw, h: vh };
     const sxScale = vw / vp.w;
     const syScale = vh / vp.h;
-    const stretch = Math.abs(syScale / sxScale - 1) >= 0.01;
+    const stretch = Math.abs(syScale / sxScale - 1) >= SEG.stretchEpsilon;
     const r = crop.rect;
     let sx, sy, sw, sh, letterbox = 0, scale;
     if (stretch) {
@@ -277,6 +303,19 @@
     try { recorder && recorder.state === "paused" && recorder.resume(); } catch (e) {}
   }
 
+  // 识别竞争状态重置（审计 Q1 痛点：挂起/竞争类标志集中在此，防散置漏重置）
+  function resetContestState() {
+    pendingLesson = "";
+    pendingLessonAt = 0;
+    pendingLowerRank = null;
+    prevHighRank = null;
+    pendingEntryAt = 0;
+    entryDismissedAt = 0;
+    silenceSplitFired = false;
+    urlBrakeApplied = false;
+    pendingStartAfterResume = false;
+  }
+
   function startSegment() {
     seq += 1;
     cur = { seq, name: currentLesson || "", chunks: [], bytes: 0 };
@@ -284,7 +323,7 @@
     segStartAt = now(); // lesson-change 的 URL 联动确认基准：本段开始后 URL 变过才算真换课
     segLessonAtStart = currentLesson || ""; // URL 切节「课时名未变否决」的基准（见 checkPendingSplits）
     endedSeen = false; // 新段从"未播完"开始（弹窗入口前提重新收敛）
-    urlBrakeApplied = false; // 新 recorder 天然无刹车
+    resetContestState(); // 竞争与挂起重新收敛（prevHighRank 残留会误挡新节首报）
     if (resumeTs === null) resumeTs = now();
     recorder = makeRecorder();
     recorder.start(1000);
@@ -429,16 +468,11 @@
     lastUrl = payload.tabUrl || "";
     lastUrlFp = urlFingerprint(lastUrl);
     urlLog = [];
-    urlBrakeApplied = false;
     pendingUrl = "";
     lastUrlChangeAt = 0;
-    pendingLesson = "";
-    pendingLessonAt = 0;
-    pendingLowerRank = null;
     lastSilenceSplitAt = 0;
     segStartAt = 0;
     segLessonAtStart = "";
-    pendingEntryAt = 0;
     betweenStartAt = 0;
     resumeAfterBetween = false;
     lastSplitInfo = null;
@@ -450,8 +484,8 @@
     endedStopFired = false;
     endedSeen = false;
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
-                         // 导致全局闸从开录起失效——开录静默误切段、占闸挤掉真播完信号）
-    silenceSplitFired = false;
+                         // 导致全局闸从开录起失效——开录静默误切节、占闸挤掉真播完信号）
+    resetContestState(); // 竞争/挂起类集中重置（含 prevHighRank/entryDismissedAt 等）
     captureRequested = false;
     startError = "";
     recStream = null;
@@ -496,6 +530,11 @@
     if (state !== "paused") return { ok: false };
     resumeTs = now();
     state = "recording";
+    // 切节收尾毫秒窗内被 pause 打断的新段在此补开（doSplit 的 onstop 置位）
+    if (pendingStartAfterResume) {
+      pendingStartAfterResume = false;
+      startSegment();
+    }
     try { recorder && recorder.state !== "inactive" && recorder.resume(); } catch (e) {}
     return { ok: true };
   }
@@ -530,7 +569,7 @@
     pauseAfterStop = !!keepOffscreen;
     state = "stopping";
     if (splitTimer) { clearTimeout(splitTimer); splitTimer = null; }
-    const deadline = now() + 300000; // 大文件落定上限 5 分钟
+    const deadline = now() + SEG.finishDeadlineMs; // 大文件落定上限 5 分钟
     if (resumeTs !== null) { const t = now(); activeBaseSeg += t - resumeTs; activeBaseTotal += t - resumeTs; resumeTs = null; }
     if (recorder && recorder.state !== "inactive") {
       recorder.onstop = discard
@@ -560,6 +599,7 @@
       a.click();
       a.remove();
       pendingAnchors.add(name);
+      anchorURLs.set(name, url); // 落定回执时 revoke（长录多段防 blob 内存驻留）
       anchorName = name;
       chrome.runtime.sendMessage({ type: "track-anchor", name }).catch(() => {});
       segmentsDone.push({ seq: seg.seq, name: seg.name, bytes: blob.size, filename: name });
@@ -572,7 +612,7 @@
     if (state !== "stopping") return;
     if (pendingFinalize > 0) return; // 还有段的收尾没走完，等它把锚点注册进来
     if (pauseAfterStop) {
-      // 切段进 between：不等锚点下载确认——offscreen 文档不关闭，下载由浏览器
+      // 切节进 between：不等锚点下载确认——offscreen 文档不关闭，下载由浏览器
       // 异步完成，确认只对最终收尾必要；等确认会让续录晚几秒，新节开头又丢
       pauseAfterStop = false;
       state = "between";
@@ -659,7 +699,9 @@
       return;
     }
     lastSplitAt = now();
-    // 切段后识别状态重置：mediasession 等高优源的残留值不再挡住下一节识别
+    pendingLesson = ""; // 信号使命完成（在执行点清除而非排队点——去抖窗内被
+    // stopAll/pause 打断时挂起保留，下轮 tick 重新排队，防换课信号丢失）
+    // 切节后识别状态重置：mediasession 等高优源的残留值不再挡住下一节识别
     //（下一节的首个识别值从任意源接受，随后来源升级继续收敛）
     currentLessonSrc = "";
     // 切段即重新武装停播静默（30s 间隔仍防碎切）——若跳转后新节 playing 上报
@@ -670,11 +712,16 @@
     // 不广播连播；播完/静默类切段的广播在 stoppedPlayingCheck 里做
     const old = recorder;
     const seg = cur;
-    recorder = null;
+    // 不置 recorder=null（审计 H1）：置 null 后 stopAll 见"无活跃 recorder"直接
+    // 收尾关文档，悬挂的本 onstop/finalizeSegment 被杀——最后一段数据丢失。
+    // 保留引用让 stopAll 走 recorder.stop() 正常路径（stop 对 inactive 幂等）。
     if (!old || old.state === "inactive") { startSegment(); return; }
     old.onstop = () => {
-      finalizeSegment(seg).then(maybeFinish); // 停止恰发生在切段收尾期间时，也要补完成判定
-      if (state === "recording" || state === "paused") startSegment();
+      finalizeSegment(seg).then(maybeFinish); // 停止恰发生在切节收尾期间时，也要补完成判定
+      // 仅 recording 开新段；paused（stop→onstop 毫秒窗内恰好 pause）延迟到
+      // resume 再开，防"新段实录而计时按暂停"的错位
+      if (state === "recording") startSegment();
+      else if (state === "paused") pendingStartAfterResume = true;
     };
     try { old.stop(); } catch (e) { console.warn(e); startSegment(); }
   }
@@ -745,7 +792,7 @@
     // 已开播吸进旧节尾部（B 站多 P 实测污染几秒）。即刻切 = 旧节尾部截止
     // URL 变化瞬间（新内容未开播，干净），新内容从加载期起完整续录零丢失。
     // 10s 节流防 URL 抖动碎切：未到间隔退回稳定期路径（挂起保留重试）。
-    if (settings.segUrlMode && pendingUrl && now() - lastUrlChangeAt >= 500
+    if (settings.segUrlMode && pendingUrl && now() - lastUrlChangeAt >= SEG.urlInstantMinMs
         && state === "recording" && now() - lastSplitAt >= SEG.minSplitGapMs
         && cur && cur.bytes >= SEG.idleDiscardBytes) {
       pendingUrl = "";
@@ -790,7 +837,10 @@
       //（开录识别收敛、弹窗期抖动）不切。
       const urlChangedSinceSeg = segStartAt > 0 && lastUrlChangeAt > segStartAt;
       if (p === currentLesson && !(cur && cur.name === p && cur.bytes > 0) && urlChangedSinceSeg) {
-        if (requestSplit("lesson-change")) pendingLesson = "";
+      // 排队成功不在此时清 pendingLesson——清除移至 doSplit 执行点（审计 M-d）：
+      // 去抖 1.5s 窗内若被 stopAll（清 splitTimer）/ pause（doSplit 拒绝）打断，
+      // 挂起保留由下轮 tick 重新排队，防换课信号丢失致两课并一文件
+      if (requestSplit("lesson-change")) { /* 挂起保留，doSplit 成功时清 */ }
       } else {
         pendingLesson = "";
       }
@@ -823,9 +873,10 @@
     if (currentLesson && rank < curRank) {
       // 来源降级：挂起观察（见函数头②）——稳定 2s 且高 rank 未变则接管
       if (pendingLowerRank && pendingLowerRank.name === name && pendingLowerRank.src === src) {
-        if (now() - pendingLowerRank.at >= 2000) {
+        if (now() - pendingLowerRank.at >= SEG.takeoverStableMs) {
           console.info("[rec] 降级源稳定接管（高 rank 值未随内容变化）:", src, name);
           pendingLowerRank = null;
+          prevHighRank = { name: currentLesson, src: currentLessonSrc }; // 记被替代值：恒值回归防护
           currentLesson = name;
           currentLessonSrc = src;
           if (cur && cur.name !== name) cur.name = name;
@@ -835,6 +886,10 @@
       }
       return;
     }
+    // 恒值回归防护（审计 M-e）：接管后高 rank 源每 700ms 心跳报回**同一个旧值**
+    //（B 站 mediasession 合集标题），不是真变化——不夺回 currentLesson，消除
+    // 接管/夺回的周期震荡。真换课时高 rank 值必与新值不同，正常通行
+    if (prevHighRank && src === prevHighRank.src && name === prevHighRank.name) return;
     pendingLowerRank = null; // 正常路径到达 = 高 rank 值在变化，撤降级挂起
     // 来源升级仅限「识别源非空且优先级更高」。切段后 src 被清空，若空源也算
     // 升级，下一节首个上报就会误判升级并改写已有段名——合并段被命名成下一节
@@ -900,8 +955,15 @@
     }
     if (data.ended) {
       endedSeen = true; // 弹窗入口信号的"播完"前提（暂停时控制栏按钮可见但 ended 未到）
+      // ended 迟到重臂（审计 M-c）：入口挂起刚因"无 ended"被作废且作废未超过
+      // 稳定期——入口仍可见（变化沿不会重发），从作废时刻起重算稳定期
+      if (entryDismissedAt && now() - entryDismissedAt < SEG.entryStableMs
+          && state === "recording" && mode === "segment") {
+        pendingEntryAt = entryDismissedAt;
+      }
+      entryDismissedAt = 0;
       // 分节模式：ended 不直接动作（分片播放每分片都触发，v2.3.1——由停播/入口
-      // 判定驱动切段）。单段模式：ended 锁存（5s 内 playing 恢复会清锁存 = 分片
+      // 判定驱动切节）。单段模式：ended 锁存（5s 内 playing 恢复会清锁存 = 分片
       // 假信号）→ 自动停止整场——playing 信号盲区站（路飞类 iframe）的播完通道。
       if (mode === "single") endedLatchTs = now();
     }
@@ -1002,8 +1064,10 @@
     if (!pendingEntryAt) return;
     if (!endedSeen) {
       // 播完前提：暂停时播放器控制栏的「下一集」按钮也可见，但 ended 未到——
-      // 不是播完弹窗，不停录（否则暂停期间碎片循环）
+      // 不是播完弹窗，不停录（否则暂停期间碎片循环）。记作废时刻：ended 若在
+      // 3s 内迟到（content 事件与轮询的时序差）重臂挂起，防双盲站点通道失效
       pendingEntryAt = 0;
+      entryDismissedAt = now();
       return;
     }
     if (now() - pendingEntryAt < SEG.entryStableMs) return;
@@ -1025,7 +1089,7 @@
     // 连播定时兜底：播放器信号（ended/playing 上报）可能因跨域 iframe 全部缺失，
     // 分节模式下每 45 秒广播一次连播指令，保证弹窗类入口最迟一分钟内被点掉
     if (state === "recording" && mode === "segment" && settings.autoNext !== false
-        && now() - lastAdvanceBroadcast >= 45000) {
+        && now() - lastAdvanceBroadcast >= SEG.advanceFallbackMs) {
       lastAdvanceBroadcast = now();
       chrome.runtime.sendMessage({ type: "broadcast-advance" }).catch(() => {});
     }
@@ -1067,6 +1131,10 @@
         // 停录/切段晚于新节开播，新节开头几秒会录进上一节文件
         if (state === "between") {
           resumeCapture();
+        } else if (state === "stopping") {
+          // 收尾期到达：若收尾去向是 between（advance-pause 类），就绪后立即续录
+          //（原直接丢弃会退化为 30s 超时恢复，新节开头多等半分钟——审计低项）
+          if (pauseAfterStop) resumeAfterBetween = true;
         } else if (state === "recording" && mode === "segment"
                    && cur && cur.bytes >= SEG.idleDiscardBytes) {
           resumeAfterBetween = true;
@@ -1077,6 +1145,10 @@
       case "offscreen-tab-closed": sendResponse(stopAll("tab-closed")); break;
       case "anchor-landed": {
         pendingAnchors.delete(msg.name);
+        {
+          const u = anchorURLs.get(msg.name);
+          if (u) { anchorURLs.delete(msg.name); try { URL.revokeObjectURL(u); } catch (e) {} }
+        }
         if (!msg.ok) console.warn("anchor save interrupted:", msg.name, msg.error || "");
         if (state === "stopping") maybeFinish();
         sendResponse({ ok: true });

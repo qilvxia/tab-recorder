@@ -103,7 +103,7 @@ async function injectDetector(tabId, settings, mode) {
 async function trackAnchor(name) {
   const base = (p) => String(p || "").split(/[\\/]/).pop();
   const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const deadline = Date.now() + 300000; // 大文件上限 5 分钟
+  const deadline = Date.now() + 300000; // 大文件上限 5 分钟（与 offscreen SEG.finishDeadlineMs 同值）
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 700));
     let items = [];
@@ -112,7 +112,10 @@ async function trackAnchor(name) {
     } catch (e) {
       continue;
     }
-    const it = items.map((d) => ({ state: d.state, base: base(d.filename) })).find((d) => d.base === name);
+    // 匹配放宽：Chrome 对重名文件自动加 " (n)" 后缀——base 精确匹配失配会让
+    // offscreen 滞留到 5 分钟超时（审计低项）
+    const it = items.map((d) => ({ state: d.state, base: base(d.filename) }))
+      .find((d) => d.base === name || d.base.startsWith(name + " ("));
     if (!it) continue;
     if (it.state === "complete" || it.state === "interrupted") {
       chrome.runtime.sendMessage({ type: "anchor-landed", ok: it.state === "complete", name }).catch(() => {});
