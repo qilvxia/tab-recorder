@@ -131,17 +131,22 @@
   // video.ended 属性在 srcObject/重置场景不可靠）。播完后的暂停在等连播点击，
   // 不是用户暂停；playing 恢复时清除。无陈旧解除：播完弹窗停留多久都该点
   let endedArmed = false;
+  // 本帧曾真的在播过（playing 上报为真）。「用户暂停」的判据——从未在播过的
+  // 帧不适用暂停守卫：信号盲区站点（保利威类，video 在跨域 iframe）顶层可能
+  // 存在从未播放的壳 video（paused && !ended），若拦它等于拦死弹窗连播点击
+  let playingSeen = false;
 
   function attemptAdvance() {
     const vids = [...document.querySelectorAll("video")];
     if (vids.some((v) => !v.paused && !v.ended)) return; // 本帧已有视频在播，无需连播
     // 纯暂停守卫（暂停碎片第一道防线，diag_pause 实锤）：本帧存在 video、全部
-    // 「已暂停且未播完」且从未播完过（endedArmed）= 用户暂停等待。连播点击只
-    // 服务「播完去下一节」，暂停态点击 pause 控制栏常驻的 next 类按钮（点击无
-    // 导航效果也回报 advance-clicked）会每 15s 冷却期满切一个静止画面碎片
-    //（B 站实测 16.0s 自持循环），next 真有效时还会跳课。帧内无 video（跨域
-    // 播放器顶层帧等信号盲区站点）不拦——连播兜底点击照常
-    if (vids.length && vids.every((v) => v.paused && !v.ended) && !endedArmed) {
+    // 「已暂停且未播完」、从未播完过（endedArmed）且曾真的在播过（playingSeen）
+    // = 用户暂停等待。连播点击只服务「播完去下一节」，暂停态点击 pause 控制
+    // 栏常驻的 next 类按钮（点击无导航效果也回报 advance-clicked）会每 15s
+    // 冷却期满切一个静止画面碎片（B 站实测 16.0s 自持循环），next 真有效时
+    // 还会跳课。playingSeen 前提豁免信号盲区站（壳 video 从未在播，不是暂停）；
+    // 帧内无 video 的盲区帧同样不拦——连播兜底点击照常
+    if (vids.length && vids.every((v) => v.paused && !v.ended) && !endedArmed && playingSeen) {
       if (Date.now() - lastPauseSkipLog > 30000) {
         lastPauseSkipLog = Date.now();
         logAdvance("自动连播：视频暂停中，跳过连播点击");
@@ -461,6 +466,7 @@
     // 阻塞永不触发；跨帧 next 类元素也会伪造入口信号
     const isTop = window.top === window;
     const playing = isTop ? anyPlaying() : false;
+    if (playing) playingSeen = true; // 「用户暂停」判据的前提（见 attemptAdvance 守卫）
     const entryVisible = isTop ? nextEntryVisible() : false;
     if (!entryBaselineSet) {
       entryBaselineSet = true;

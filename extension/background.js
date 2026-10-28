@@ -199,10 +199,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }
       case "content-report": {
         // 来源校验（审计 S1）：只接受录制标签页的上报——历史注入到其他标签页的
-        // detector 若仍存活，其信号不得影响本场录制（跨页串扰 + 纵深防御）
+        // detector 若仍存活，其信号不得影响本场录制（跨页串扰 + 纵深防御）。
+        // 扩展自身页面（e2e-test.html 等测试页）sender.tab 为 undefined 但属于
+        // 可信上下文——直接加载的检测脚本信号放行（盲区模拟依赖 entry 信号）
         {
           const st = await getSession();
-          if (st.recording && (!sender.tab || sender.tab.id !== st.tabId)) {
+          const fromExtPage = !sender.tab && String(sender.url || "").startsWith(chrome.runtime.getURL(""));
+          if (st.recording && !fromExtPage && (!sender.tab || sender.tab.id !== st.tabId)) {
             sendResponse({ ok: true });
             break;
           }

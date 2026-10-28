@@ -85,6 +85,14 @@
   //   暂停时播放器控制栏的「下一集」按钮可见（class 启发式命中），若仅凭可见就
   //   停录会碎片循环（暂停→停录→节间恢复→又停录…，B 站 ~15s/YouTube ~47s 一个
   //   碎片，且每次恢复重置收工计时）。ended 事件到达且未再播 = 真播完才认弹窗。
+  let endedReportedEver = false; // 本场是否收到过 ended 上报（站点能力探测，段间保留）：
+  //   ended 信号盲区站（保利威类，playing/ended 对 content script 均不可见）永远
+  //   到不了 endedSeen——若无豁免，弹窗入口切节通道（其播完主通道）被整场锁死
+  //   （路飞连播回归根因）。会报 ended 的站点防护照旧，从不报的站点跳过前提。
+  let everBetween = false; // 本场是否进入过节间（v2.8.4）：盲区站的收工判定前提——
+  //   resumeTs 在 startSegment 开录也会赋值，仅凭它非 null 会在「正常播放中」
+  //   （playing 不可见、课时内无 URL 变化、无切节）误收工；卡弹窗场景必然
+  //   经历过 between（弹窗→entry-visible/between→恢复→弹窗还在），此前提精确圈定
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -479,10 +487,15 @@
     lastPlayingTs = 0;
     hasPlayed = false;
     hasPlayedEver = false;
-    lastAdvanceBroadcast = 0;
+    lastAdvanceBroadcast = now(); // 开录即视为刚广播过：否则 tick 兜底（now-0≥45s 恒真）
+    // 首轮就广播连播点击——开录时内容刚开始播，点「下一节」是跳课事故
+    //（盲区 e2e 实锤：九轮定时器把 15s 后才出现的弹窗在 1s 内点掉，
+    // entry-visible 的 3s 稳定期被抢跑）。真播完才广播（stoppedPlaying/entry）
     endedLatchTs = 0;
     endedStopFired = false;
     endedSeen = false;
+    endedReportedEver = false; // 站点能力探测按场重置（新一场重新探测 ended 可达性）
+    everBetween = false; // 盲区站收工前提按场重置
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
                          // 导致全局闸从开录起失效——开录静默误切节、占闸挤掉真播完信号）
     resetContestState(); // 竞争/挂起类集中重置（含 prevHighRank/entryDismissedAt 等）
@@ -617,6 +630,7 @@
       pauseAfterStop = false;
       state = "between";
       betweenStartAt = now();
+      everBetween = true; // 盲区站收工判定的前提（idleWrapCheck）
       hasPlayed = false; // 恢复后重新从 playing 上报收敛
       lastAdvanceBroadcast = now();
       if (resumeAfterBetween) {
@@ -958,6 +972,7 @@
     }
     if (data.ended) {
       endedSeen = true; // 弹窗入口信号的"播完"前提（暂停时控制栏按钮可见但 ended 未到）
+      endedReportedEver = true; // 本站会报 ended——entryVisibleCheck 的盲区豁免据此关闭
       // ended 迟到重臂（审计 M-c）：入口挂起刚因"无 ended"被作废且作废未超过
       // 稳定期——入口仍可见（变化沿不会重发），从作废时刻起重算稳定期
       if (entryDismissedAt && now() - entryDismissedAt < SEG.entryStableMs
@@ -1049,12 +1064,27 @@
   function idleWrapCheck() {
     const wrapSec = Number(settings.silenceWrapSeconds) > 0 ? Number(settings.silenceWrapSeconds) : 0;
     if (!wrapSec || mode !== "segment" || state !== "recording") return;
-    // 豁免判定用 hasPlayedEver（曾收到过 playing）：playing 盲区站（路飞，恒 false）
-    // 不启用收工——其连播工作良好，挂了用户手点停止。不用 hasPlayed——它在进
-    // between 时被重置（恢复后重新收敛），恢复段永远 hasPlayed=false 会让收工
-    // 判定永不启用（e2e 实测抓到的缺陷）
-    if (!resumeTs || !hasPlayedEver) return;
-    if (lastPlayingTs >= resumeTs) return; // 续录后见过播放（连播成功/误报恢复），不收工
+    if (!resumeTs) return;
+    // resumeTs 基准：只在经历过节间恢复后启用（卡弹窗必然经过 between；开录
+    // 未播 resumeTs=null 不收工，维持既有行为不引入误伤）
+    if (hasPlayedEver) {
+      // playing 可见站：续录后从未在播 → 收工。豁免判定用 hasPlayedEver（曾收到
+      // 过 playing，between 不重置）——不用 hasPlayed，它进 between 时被重置
+      //（恢复段永远 hasPlayed=false 会让收工判定永不启用，e2e 实测抓到的缺陷）
+      if (lastPlayingTs >= resumeTs) return; // 续录后见过播放（连播成功/误报恢复），不收工
+      if (now() - resumeTs < wrapSec * 1000) return;
+      stopAll("idle-wrap");
+      return;
+    }
+    // playing 盲区站（路飞 hasPlayedEver 恒 false）：playing 不可见，「无播放」
+    // 用两个前提圈定——① everBetween（经历过节间：卡弹窗场景必然弹窗→entry-
+    // visible→between→恢复→弹窗还在；正常播放中无 between 不收工，防误杀）；
+    // ② 恢复续录后 wrapSec 内 URL 无变化且无切节（真连播跳转必然带来二者之一）
+    // = 连播已挂（弹窗点不掉/课程放完）→ 收工。原豁免设计（盲区站永不收工）
+    // 在 v2.8.2 连播防护引入后不再成立：防护盲区豁免让点击通道恢复，但站点
+    // 改版/弹窗 DOM 变化仍可能卡死，需要兜底
+    if (!everBetween) return;
+    if (lastUrlChangeAt >= resumeTs || lastSplitAt >= resumeTs) return; // 有跳转/切节活动，连播仍在工作
     if (now() - resumeTs < wrapSec * 1000) return;
     stopAll("idle-wrap");
   }
@@ -1065,10 +1095,13 @@
   function entryVisibleCheck() {
     if (state !== "recording" || mode !== "segment") return;
     if (!pendingEntryAt) return;
-    if (!endedSeen) {
+    if (!endedSeen && endedReportedEver) {
       // 播完前提：暂停时播放器控制栏的「下一集」按钮也可见，但 ended 未到——
       // 不是播完弹窗，不停录（否则暂停期间碎片循环）。记作废时刻：ended 若在
-      // 3s 内迟到（content 事件与轮询的时序差）重臂挂起，防双盲站点通道失效
+      // 3s 内迟到（content 事件与轮询的时序差）重臂挂起，防双盲站点通道失效。
+      // 盲区豁免（endedReportedEver=false）：ended 信号不可见站点（保利威类）
+      // 的弹窗入口是其唯一播完证据，不能要求 ended——否则播完主通道整场锁死
+      //（路飞连播回归：弹窗挂着不切节、点击又被暂停守卫拦）
       pendingEntryAt = 0;
       entryDismissedAt = now();
       return;
@@ -1145,8 +1178,11 @@
                    // 点击链自持循环（切段→广播→冷却期满点暂停控制栏的 next 按钮
                    // →advance-clicked→又切段），周期 ≈ 点击冷却 15s+1s（B 站实测
                    // 16.0s 一个静止画面碎片）。真连播点击发生时旧节在播，本前提
-                   // 恒成立；静止段的点击不构成「播完换内容」的切分依据
-                   && lastPlayingTs > segStartAt) {
+                   // 恒成立；静止段的点击不构成「播完换内容」的切分依据。
+                   // 盲区豁免（!hasPlayedEver）：playing 信号不可见站点（保利威类）
+                   // lastPlayingTs 恒 0，本前提会把点击切分整场锁死——信任点击
+                   //（v2.3.5 确定性切分点语义）
+                   && (lastPlayingTs > segStartAt || !hasPlayedEver)) {
           resumeAfterBetween = true;
           finishSegmentForAdvance("advance-clicked");
         }

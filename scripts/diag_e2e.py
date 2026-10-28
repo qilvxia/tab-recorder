@@ -145,8 +145,10 @@ def main():
         if blank_id == "removed":
             time.sleep(1)
             grant_via_hotkey(proc, sw)
+        blind = "--blind" in sys.argv
+        tab_url = "chrome.runtime.getURL('e2e-test.html')" + ("+'#blind'" if blind else "")
         tab_id = sw.eval(
-            "chrome.tabs.create({url:chrome.runtime.getURL('e2e-test.html'), active:true}).then(t=>t.id)",
+            "chrome.tabs.create({url:%s, active:true}).then(t=>t.id)" % tab_url,
             await_promise=True)
         print("e2e 页 tabId:", tab_id)
         grant_via_hotkey(proc, sw)  # e2e 页置前台后授予 activeTab
@@ -154,7 +156,7 @@ def main():
 
         page = None
         for t in http_json("/json/list"):
-            if t.get("type") == "page" and t.get("url", "").endswith("e2e-test.html"):
+            if t.get("type") == "page" and "e2e-test.html" in t.get("url", ""):
                 page = t
                 break
         assert page, "e2e 页未打开"
@@ -162,16 +164,19 @@ def main():
         pc.cmd("Runtime.enable")
         pc.cmd("Runtime.evaluate", {"expression": "window.__clicked=0"})
 
-        # 配置 + 启动真录制（--single 走单段模式验证播完自动停/手填文件名）
+        # 配置 + 启动真录制（--single 走单段模式验证播完自动停/手填文件名；
+        # --blind 盲区站模拟：视频恒暂停+8s 弹窗+点击不续播，验证盲区豁免闭环）
         single = "--single" in sys.argv
         mode = "single" if single else "segment"
         auton = "false" if single else "true"
+        tab_url = "chrome.runtime.getURL('e2e-test.html')" + ("+'#blind'" if blind else "")
         sw.eval("chrome.tabs.sendMessage(%d, {type:'detect-config', cfg:{lessonSelector:'h1', lessonPrefix:'', autoNext:%s}}).catch(()=>{})" % (tab_id, auton))
         sw.eval("chrome.storage.session.set({recording:true, tabId:%d, mode:'%s'})" % (tab_id, mode))
         sw.eval(
             "chrome.offscreen.createDocument({url:'offscreen.html',reasons:['USER_MEDIA'],justification:'e2e'}).catch(()=>{})",
             await_promise=True)
         time.sleep(1.5)
+        wrap = 20 if blind else 15
         payload_js = ("payload:{mode:'single',fileName:'单段诊断',presetSeconds:%d,startDelaySeconds:0,tabTitle:'e2e',tabUrl:''}"
                       % (20 if "--preset" in sys.argv else 0)
                       if single else
@@ -181,13 +186,13 @@ def main():
             "  const sid = await new Promise((res,rej)=>chrome.tabCapture.getMediaStreamId({targetTabId:%d},(id)=>{"
             "    const e=chrome.runtime.lastError; (e||!id)?rej(new Error(e?e.message:'no id')):res(id);}));"
             "  return await chrome.runtime.sendMessage({type:'offscreen-schedule', streamId:sid,"
-            "    settings:{format:'mp4',videoBitrate:2000000,frameRate:15,audioBitrate:96000,autoNext:%s,silenceWrapSeconds:15,lessonSelector:'h1',lessonPrefix:''},"
+            "    settings:{format:'mp4',videoBitrate:2000000,frameRate:15,audioBitrate:96000,autoNext:%s,silenceWrapSeconds:%d,lessonSelector:'h1',lessonPrefix:''},"
             "    %s, tabId:%d});"
-            "})()" % (tab_id, auton, payload_js, tab_id), await_promise=True)
+            "})()" % (tab_id, auton, wrap, payload_js, tab_id), await_promise=True)
         print("录制启动:", resp)
 
-        # 采样：单段 50s（30s 播放 + 5s 停播/ended 锁存 + 收尾落盘）；分节 150s（30s×3 节）
-        for i in range(25 if single else 75):
+        # 采样：单段 50s（30s 播放 + 5s 停播/ended 锁存 + 收尾落盘）；分节 150s（30s×3 节）；盲区 90s（8s 弹窗+3s 切节+20s 收工+余量）
+        for i in range(25 if single else (45 if blind else 75)):
             time.sleep(2)
             try:
                 st = sw.eval(
