@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-28 · v2.8.2）
+## 当前状态（2026-10-28 · v2.8.3）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -117,9 +117,10 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ⏳ ~~待用户 Chrome 复验 v2.8.0~~ → **用户复验：暂停碎片依旧"没有一点变化"（B 站 15s/YouTube 47s/路飞无）——用户指令：停止盲猜，自己上浏览器取证再改**
 - ✅ v2.8.1（URL 切节加"本段播过"前提）：~~碎片周期=该站 URL 变化周期的实锤~~ **假设错误，已被 v2.8.2 取证证伪**——diag_pause_page 实测 B 站/YouTube 暂停 120s 顶层 URL **零变化**（"暂停态页面周期更新 URL"从未被观测，纯推测）。前提本身保留（静止段 URL 变化不构成切分依据的语义仍正确），但与碎片根因无关
 - ✅ v2.8.2（**暂停碎片真根因：连播点击链自持循环——两阶段浏览器取证实锤**）：**取证①** diag_pause_page.py（纯页面观测，B 站/YouTube 各 120s 暂停）：URL 零变化、单一 video 无浮层预览、无 ended 事件、next 类元素常驻可见——URL 系假设全灭。**取证②** diag_pause.py（扩展全链路：B 站真站点+真 tabCapture+segUrlMode+暂停 150s）：切节时间线 `advance-pause×1 → advance-clicked 每 16.0s×7`，advanceLog 实锤「已点击 文本『下一个 (])』」（pause 控制栏常驻 next 按钮，点击无导航效果也回报成功），urlLog 全程无变化——**自持循环：切段→finishSegmentForAdvance 重发 broadcast-advance→content 九轮定时器→15s 冷却期满点 next 类可见元素→advance-clicked 回报→又切段→又广播**，周期=冷却 15s+轮次 1s=16s（B 站实测吻合）；YouTube 点击多失败/元素消失致自持链断、靠 45s 兜底广播重启=45+2≈47s（吻合）。**循环每环 between→resumeCapture 重置 resumeTs→idleWrap 永不收工**（=用户反馈"60s 收工到点不停"的根因）。**修复（双防线，语义判定）**：① offscreen advance-clicked 录制态切段路径加 `lastPlayingTs > segStartAt`（连播点击语义=播完去下一节，真连播点击时旧节在播恒成立；静止段点击不构成切分依据；between 态 resumeCapture 保持——恢复良性，交 idleWrap 判定收工）；② content-detect attemptAdvance 纯暂停守卫：帧内存在 video 且全部「paused && !ended」且 `!endedArmed`（endedArmed=本帧自上次开播以来播完过：ended 事件置位/playing 清除/无陈旧解除——**不能只看 video.ended 属性**，站点播放器人工 dispatchEvent(ended)（e2e 页即此形态）属性仍 false，首轮守卫曾误杀 e2e 连播回归，教训：**守卫判定必须与信号源同源**）→ 暂停等待不点击（帧内无 video 的路飞信号盲区不拦，连播兜底照常；30s 日志节流防 advanceLog 刷屏）。**验证（全自动化实跑）**：B 站×2+YouTube 暂停 150s——零碎片、切节仅 advance-pause×1+30s 超时恢复、**96.2s idle-wrap 精确收工**（=超时恢复 36.1s+60s）、advanceLog「视频暂停中，跳过连播点击」；e2e 连播三节回归通过（三文件命名正确）；smoke PASS。已知产物语义：暂停场景收工时保存一个「30s 超时恢复→60s 收工」间的静止画面尾段文件（between 超时兜底的既有设计，非碎片循环）。**测试基建**：diag_pause_page.py/diag_pause.py 新增（diag_bili 代理参数+diag_e2e 框架）；diag_pause 焦点授予加 **executeScript 真实验证+重试**（popup 检测成功≠activeTab 已授予目标 tab——历史 e2e 间歇失败根因；残留 Edge 进程持续干扰焦点链路，先 kill_test_chrome 再跑）
-- ⏳ **待用户 Chrome 复验 v2.8.2（重点）**：B 站/YouTube 勾 URL 模式分节录制中**暂停视频 2 分钟**——应只有暂停时刻保存的那一节（正常大文件），**无 15s/47s 碎片**，约 90 秒后自动收工（面板原因 idle-wrap，可能多一个静止画面尾段文件）；**暂停 1 分钟内点续播**——继续录制无缝；正常连播切 P 不受影响；路飞连播回归；其余 v2.7.0-v2.8.0 复验项继续
-- ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成）→ ⏳ 上架流程
-- ⏳ 上架流程未开始
+- ✅ ~~待用户 Chrome 复验 v2.8.2~~ → **用户验收通过：暂停碎片修复 + M4（手填文件名/自动停止三件）全部通过**；新需求：面板每次打开回到默认设置，要求记住上次选择
+- ✅ v2.8.3（**面板设置记忆** + 上架包就绪）：popup 已有持久化基建（loadSettings/saveSetting→storage.local，延时/自动连播/URL 模式/收工时长/录制内容三选/码率帧率本就保存），补齐 5 项每次重置的：① **模式切换**（uiMode，原 setMode("single") 写死）；② **定时停止**（presetMode chips 高亮恢复 + presetTime 时长值，存原样字符串启动时 parseDuration 仍严格校验）；③ **课程名按站点记忆**（courseNameByHost 键控——当前站点恢复上次填写、跨站点仍预填域名，全局单值跨站恢复旧名是错的）；④ **单段手填文件名**（lastFileName，一次性名字全局单值）。不改 DEFAULT_SETTINGS（缺省兼容）、不碰录制链路。**上架包**：新增 scripts/make_store_zip.py（读 manifest 版本号→根目录 tab-recorder-<版本>.zip，排除 e2e-test.html/e2e-page.js/advance-test* 测试页）；tab-recorder-2.8.3.zip 已生成（12 文件，zip 完整性校验 OK）。验证：语法/smoke PASS
+- ⏳ **上架流程（材料阶段）**：包已就绪；剩余开发者后台材料——商店描述文案、隐私声明（零数据收集 + 权限用途逐条：tabCapture/offscreen/downloads/storage/scripting/activeTab）、截图
+- ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成，**用户验收通过**）→ ⏳ 上架流程（v2.8.3 包已生成，材料阶段）
 
 ## 开发与测试
 
@@ -140,5 +141,5 @@ powershell -File scripts/kill_test_chrome.ps1  # 清理测试进程
   - `offscreen.html/js` 录制引擎：取流、回环、延时、MediaRecorder、File+锚点保存
   - `content-detect.js` 按需注入（allFrames + 重试）：播放标题七级级联、播完事件
   - `popup.html/css/js` 控制面板（延时/开始/停止/状态；M2 加回模式切换）
-- `scripts/` — smoke_test.py（Edge 冒烟）、kill_test_chrome.ps1、make_icons.py、diag_e2e.py（Edge 端到端连播回归，--single/--preset 变体）、diag_bili.py（--edge 识别级联采样）、diag_pause_page.py（纯页面暂停态观测，无扩展）、diag_pause.py（暂停碎片扩展全链路复现，焦点授予带 executeScript 验证——跑之前先 kill_test_chrome 清残留进程）
+- `scripts/` — smoke_test.py（Edge 冒烟）、kill_test_chrome.ps1、make_icons.py、make_store_zip.py（上架包：排除测试页）、diag_e2e.py（Edge 端到端连播回归，--single/--preset 变体）、diag_bili.py（--edge 识别级联采样）、diag_pause_page.py（纯页面暂停态观测，无扩展）、diag_pause.py（暂停碎片扩展全链路复现，焦点授予带 executeScript 验证——跑之前先 kill_test_chrome 清残留进程）
 - `legacy-v1/` — v1.1.11 完整归档（含降级链/状态窗/自定义目录等全部历史与文档）

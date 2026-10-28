@@ -71,15 +71,21 @@ async function init() {
   const st = await chrome.runtime.sendMessage({ type: "status" }).catch(() => null);
   render(st && st.state !== "idle" ? st : null);
 
-  $("modeSingle").onclick = () => setMode("single");
-  $("modeSegment").onclick = () => setMode("segment");
-  setMode("single");
+  $("modeSingle").onclick = () => { setMode("single"); saveSetting("uiMode", "single"); };
+  $("modeSegment").onclick = () => { setMode("segment"); saveSetting("uiMode", "segment"); };
+  setMode(s.uiMode === "segment" ? "segment" : "single");
 
-  // 课程名默认预填站点域名，可改
-  try {
-    const host = new URL(tabInfo.url).hostname.replace(/^www\./, "");
-    $("courseFolder").value = host;
-  } catch (e) { $("courseFolder").value = ""; }
+  // 课程名：同一站点恢复上次填写的名称（跨站点仍预填域名）
+  let courseHost = "";
+  try { courseHost = new URL(tabInfo.url).hostname.replace(/^www\./, ""); } catch (e) {}
+  const savedNames = s.courseNameByHost || {};
+  $("courseFolder").value = savedNames[courseHost] || courseHost;
+  $("courseFolder").onchange = async () => {
+    if (!courseHost) return;
+    const names = ((await loadSettings()).courseNameByHost) || {};
+    names[courseHost] = $("courseFolder").value.trim();
+    await saveSetting("courseNameByHost", names);
+  };
   $("autoNext").checked = s.autoNext !== false;
   $("autoNext").onchange = async () => {
     await saveSetting("autoNext", $("autoNext").checked);
@@ -94,15 +100,22 @@ async function init() {
     $("silenceWrap").value = v;
     await saveSetting("silenceWrapSeconds", v);
   };
-  // 定时停止 chips：不限 / 自定义（00:00:00）
+  // 定时停止 chips：恢复上次选择（不限/自定义 + 时长；时长存原样字符串，
+  // 启动时 parseDuration 仍严格校验，存了非法串不影响安全）
+  presetMode = s.presetMode === "custom" ? "custom" : "off";
+  $("presetChips").querySelectorAll(".chipBtn").forEach((b) => b.classList.toggle("active", b.dataset.mode === presetMode));
+  $("presetTime").classList.toggle("hidden", presetMode !== "custom");
+  $("presetTime").value = s.presetTime || "00:00:00";
   $("presetChips").querySelectorAll(".chipBtn").forEach((btn) => {
     btn.onclick = () => {
       presetMode = btn.dataset.mode;
+      saveSetting("presetMode", presetMode);
       $("presetChips").querySelectorAll(".chipBtn").forEach((b) => b.classList.toggle("active", b === btn));
       $("presetTime").classList.toggle("hidden", presetMode !== "custom");
       if (presetMode === "custom") $("presetTime").focus();
     };
   });
+  $("presetTime").onchange = () => saveSetting("presetTime", $("presetTime").value.trim());
   // 录制内容三选（音视频/仅视频/仅音频——仅音频输出 webm）
   $("kindChips").querySelectorAll(".chipBtn").forEach((btn) => {
     btn.classList.toggle("active", btn.dataset.kind === (s.recordKind || "av"));
@@ -120,6 +133,9 @@ async function init() {
       await saveSetting(key, Math.max(1, Number($(id).value) || 0) * mul);
     };
   }
+  // 单段手填文件名：恢复上次填写（一次性名字，全局单值）
+  $("fileNameInput").value = s.lastFileName || "";
+  $("fileNameInput").onchange = () => saveSetting("lastFileName", $("fileNameInput").value.trim());
 
   $("startBtn").onclick = startRecording;
   $("cropPickBtn").onclick = pickCropRegion;
