@@ -10,8 +10,8 @@
   if (window.__tabRecDetector) return;
   window.__tabRecDetector = true;
 
-  let cfg = { lessonSelector: "h1", courseSelector: "", autoNext: false };
-  let last = { lesson: "", lessonSrc: "", lessonAlt: "", course: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false, viewport: null };
+  let cfg = { lessonSelector: "h1", autoNext: false };
+  let last = { lesson: "", lessonSrc: "", lessonAlt: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false, viewport: null };
   const seenVideos = new Set();
 
   // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
@@ -132,27 +132,27 @@
       if (!v.paused && !v.ended) return; // 本帧已有视频在播，无需连播
     }
     if (Date.now() - lastClickAt < ADV_CLICK_COOLDOWN) return; // 本帧冷却
+    // 冷却查询走消息（session 已不对 UNTRUSTED 上下文开放——审计 S1）；
+    // 查询失败（旧实例上下文失效 / SW 未响应）降级为直接点击
     let req;
     try {
-      req = chrome.storage.session.get("lastAdvanceClick");
+      req = chrome.runtime.sendMessage({ type: "advance-cooldown" });
     } catch (e) {
-      // 扩展重载后旧实例的 chrome API 在调用本身同步抛 "Extension context
-      // invalidated"（then/catch 兜不住同步抛错，会冒成 Uncaught Error）。
-      // 旧实例必须彻底停摆：它仍能操作页面 DOM，降级点击会真的跳课；新实例
-      // 已由注入流程的守卫 token 机制重建接管。
+      // 扩展重载后旧实例的 chrome API 在调用本身同步抛（彻底停摆：旧实例仍能
+      // 操作页面 DOM，降级点击会真的跳课；新实例已由守卫 token 机制重建接管）
       advTimers.forEach(clearTimeout);
       advTimers = [];
       return;
     }
-    req.then((s) => {
-      if (Date.now() - (s.lastAdvanceClick || 0) < ADV_CLICK_COOLDOWN) {
+    Promise.resolve(req).then((r) => {
+      if (r && r.ok && Date.now() - r.ts < ADV_CLICK_COOLDOWN) {
         advTimers.forEach(clearTimeout);
         advTimers = [];
         logAdvance("自动连播：冷却期内（已有点击），跳过");
         return;
       }
       doClick();
-    }).catch(() => doClick()); // 冷却检查失败（如 session 未开放）降级为直接点击
+    }).catch(() => doClick());
   }
 
   function doClick() {
@@ -225,7 +225,6 @@
         data: {
           lesson: last.lesson, lessonSrc: last.lessonSrc,
           lessonAlt: last.lessonAlt, lessonAltSrc: last.lessonAlt ? "active-item" : "",
-          course: last.course,
           url: last.url, ended: last.ended, playing: last.playing,
           viewport: last.viewport,
         },
@@ -387,7 +386,7 @@
   // 会误命中（关闭按钮），不进此信号。播放中的贴片「跳过」类误报由 playing
   // 心跳在 offscreen 端作废挂起。变化沿上报：常驻目录项不产生新事件。
   function nextEntryVisible() {
-    const els = document.querySelectorAll('[class*="next"],[class*="skip"],[class*="continue"]');
+    const els = document.querySelectorAll('[class*="next" i],[class*="skip" i],[class*="continue" i]');
     for (const el of els) {
       if (visible(el)) return true;
     }
@@ -434,13 +433,16 @@
     //（级联首位挡死 active-item，分集名从未离开页面=v2.5.5 修复无效的根因），
     // 竞争上移到 offscreen 的多源语义层（降级挂起接管等）裁决
     const altName = src === "active-item" ? "" : pickActiveListItem();
-    const course = pick(cfg.courseSelector);
     // url 只报顶层帧：iframe 的 location.href（广告容器/预创建组件常见 about:blank）
     // 与换课无关，混进来会与顶层地址交替覆盖、每次交替都判为内容变化 → 周期性碎切
     //（YouTube 实测 ~10s 碎片根因）
     const url = window.top === window ? location.href : "";
-    const playing = anyPlaying();
-    const entryVisible = nextEntryVisible();
+    // 播放/入口信号限顶层帧（与 url 同判定，审计 M-a）：iframe 里的广告/预加载
+    // 视频持续在播会不停刷新引擎的"最后在播"时刻——停播切节与自动收工被广告帧
+    // 阻塞永不触发；跨帧 next 类元素也会伪造入口信号
+    const isTop = window.top === window;
+    const playing = isTop ? anyPlaying() : false;
+    const entryVisible = isTop ? nextEntryVisible() : false;
     if (!entryBaselineSet) {
       entryBaselineSet = true;
     } else if (entryVisible && !last.entryVisible) {
@@ -462,12 +464,11 @@
     }
     const vpChanged = JSON.stringify(last.viewport) !== last.vpJson;
     if (vpChanged) last.vpJson = JSON.stringify(last.viewport);
-    if (forceReport || vpChanged || playing !== last.playing || name !== last.lesson || altName !== last.lessonAlt || course !== last.course || url !== last.url) {
+    if (forceReport || vpChanged || playing !== last.playing || name !== last.lesson || altName !== last.lessonAlt || url !== last.url) {
       forceReport = false;
       last.lesson = name;
       last.lessonSrc = src;
       last.lessonAlt = altName;
-      last.course = course;
       last.url = url;
       last.playing = playing;
       report();

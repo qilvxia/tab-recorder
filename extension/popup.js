@@ -226,7 +226,6 @@ async function startRecording() {
     fileName: uiMode === "single" ? $("fileNameInput").value.trim() : "",
     presetSeconds,
     startDelaySeconds: Math.min(60, Math.max(0, Number($("startDelay").value) || 0)),
-    tabTitle: tabInfo.title,
     tabUrl: tabInfo.url,
   };
   const cr = await getCropRegion();

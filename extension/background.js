@@ -3,10 +3,9 @@
 const OFFSCREEN_URL = "offscreen.html";
 let keepaliveCount = 0;
 
-// session 存储默认不对 content script 开放——content-detect 的连播点击冷却需要它
-try {
-  chrome.storage.session.setAccessLevel({ accessLevel: "TRUSTED_AND_UNTRUSTED_CONTEXTS" });
-} catch (e) { /* 旧版本浏览器无此 API 时忽略 */ }
+// storage.session 保持默认 TRUSTED_ONLY（曾全局开放 UNTRUSTED 供内容脚本读
+// 冷却戳——审计 S1：allFrames 注入的第三方 iframe 帧内容脚本因此可读全部
+// session 键。现冷却查询改走消息（advance-cooldown case），session 不再开放）
 
 async function hasOffscreen() {
   const ctxs = await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] });
@@ -130,6 +129,13 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         // 预约式启动：此刻不取流（捕获推迟到倒计时归零，弹窗全程稳定）
         try {
           const { tabId, settings, payload } = msg;
+          // 重入守卫：录制中拒绝二次开始（popup status 轮询失败误显空闲时，
+          // 再点开始会重入 schedule——旧流/回环不停、双录制状态错乱）
+          const st = await getSession();
+          if (st.recording) {
+            sendResponse({ ok: false, error: "已有录制进行中，请先停止" });
+            break;
+          }
           await ensureOffscreen();
           await chrome.storage.session.set({ recording: true, tabId, mode: payload.mode, startedAt: Date.now() });
           const resp = await sendOffscreen({ type: "offscreen-schedule", settings, payload, tabId });
@@ -189,13 +195,20 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case "content-report": {
+        // 来源校验（审计 S1）：只接受录制标签页的上报——历史注入到其他标签页的
+        // detector 若仍存活，其信号不得影响本场录制（跨页串扰 + 纵深防御）
+        {
+          const st = await getSession();
+          if (st.recording && (!sender.tab || sender.tab.id !== st.tabId)) {
+            sendResponse({ ok: true });
+            break;
+          }
+        }
         if (await hasOffscreen()) chrome.runtime.sendMessage({ type: "offscreen-content", data: msg.data }).catch(() => {});
         // 播完事件广播给录制标签页所有帧：ended 可能在 iframe 的视频上，而「下一节」
         // 入口在顶层文档——需要每个帧各自找入口点击（连播）。
-        // 广播目标优先 sender.tab，无则用会话中记录的录制标签页（同时使链路可独立驱动）
         if (msg.data && msg.data.ended) {
-          const st = await getSession();
-          const tabId = (sender.tab && sender.tab.id) != null ? sender.tab.id : st.tabId;
+          const tabId = sender.tab && sender.tab.id;
           if (tabId != null) chrome.tabs.sendMessage(tabId, { type: "try-advance" }).catch(() => {});
         }
         sendResponse({ ok: true });
@@ -238,6 +251,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         }
         break;
       }
+      case "advance-cooldown": {
+        // 连播点击冷却查询（曾由内容脚本直读 session——审计 S1 收紧后改走消息，
+        // session 不对 UNTRUSTED 上下文开放）
+        try {
+          const { lastAdvanceClick } = await chrome.storage.session.get("lastAdvanceClick");
+          sendResponse({ ok: true, ts: lastAdvanceClick || 0 });
+        } catch (e) {
+          sendResponse({ ok: false });
+        }
+        break;
+      }
       case "advance-clicked": {
         // 连播点击成功 → offscreen 从 between 立即续录（新节内容零丢失）
         chrome.runtime.sendMessage({ type: "offscreen-advance-clicked" }).catch(() => {});
@@ -266,13 +290,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case "keepalive": {
-        // offscreen 每 2 秒心跳；顺带上报标签页 audible（静默检测信号，M2 用）
+        // offscreen 每 2 秒心跳；顺带核对录制标签页存活
         const st = await getSession();
         if (st.recording && st.tabId != null) {
           keepaliveCount += 1;
           try {
-            const tab = await chrome.tabs.get(st.tabId);
-            chrome.runtime.sendMessage({ type: "offscreen-audible", audible: !!tab.audible }).catch(() => {});
+            await chrome.tabs.get(st.tabId);
           } catch (e) { /* 标签页已关闭 */ }
           // 每 3 次心跳（约 6 秒）补注入检测器：覆盖晚出现的播放器 iframe
           // （脚本首行守卫使已有帧为空操作；弹窗打开期间跳过，避免任何潜在焦点干扰）
@@ -284,8 +307,6 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             } catch (e) {}
             if (!skip) {
               try {
-                await chrome.scripting.executeScript({ target: { tabId: st.tabId, allFrames: true }, files: ["content-detect.js"] });
-                // 补发 detect-config：晚出现的播放器 iframe 也需要拿到 cfg（含 autoNext）
                 const s = await chrome.storage.local.get("settings");
                 const st2 = await getSession();
                 await injectDetector(st.tabId, s.settings || {}, st2.mode);

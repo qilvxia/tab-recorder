@@ -20,7 +20,6 @@
   let mime = "";
   let ext = "mp4";
 
-  let chunks = []; // 当前段
   let bytes = 0; // 当前段字节
   let activeBaseSeg = 0; // 当前段计时（暂停不计入）
   let activeBaseTotal = 0; // 总计时
@@ -373,8 +372,7 @@
     } catch (e) { captureSize = null; }
 
     // 回环：tabCapture 后原标签页静音，必须把音频接回扬声器才能边录边听。
-    // 同时挂 AnalyserNode 实测音量——静默检测的信号源（tab.audible 在部分
-    // Chrome 版本的 tabCapture 下不可靠，改用音频流直接分析）
+    // （静默检测的信号源是 content-detect 上报的 playing，不在此音频路径上）
     try {
       audioCtx = new AudioContext();
       audioCtx.createMediaStreamSource(new MediaStream(stream.getAudioTracks())).connect(audioCtx.destination);
@@ -425,7 +423,6 @@
     seq = 0;
     cur = null;
     segmentsDone = [];
-    chunks = [];
     bytes = 0;
     currentLesson = "";
     currentLessonSrc = "";
@@ -463,6 +460,8 @@
     captureSize = null;
     curViewport = null;
     viewportDrift = false;
+    pendingAnchors.clear(); // 上一场未落定的锚点残留会让本场 maybeFinish 卡到 deadline
+    anchorName = "";
     activeBaseSeg = 0;
     activeBaseTotal = 0;
     state = "countdown";
@@ -486,6 +485,9 @@
     activeBaseTotal += t - resumeTs;
     resumeTs = null;
     state = "paused";
+    // 用户手动暂停时解除 URL 刹车（审计 M-b）：刹车标志若残留，恢复后同段后续
+    // URL 变化因"已施加"判断不再刹车，旧节尾部污染回潮
+    releaseUrlBrake();
     try { recorder && recorder.state !== "inactive" && recorder.pause(); } catch (e) {}
     return { ok: true };
   }
@@ -859,7 +861,6 @@
     // 帧内备选（active-item）：与主值并行竞争（B 站 mediaSession=合集总标题，
     // 分集名只能从这条通道到 offscreen——经降级挂起接管语义裁决）
     if (data.lessonAlt) applyLessonReport(stripLessonPrefix(data.lessonAlt), String(data.lessonAltSrc || "active-item"));
-    if (data.course && !courseFolder) courseFolder = sanitize(data.course, 40);
     if (data.url) onUrlChange(data.url);
     if (data.viewport && data.viewport.w > 0) {
       curViewport = data.viewport;
@@ -904,11 +905,6 @@
       // 假信号）→ 自动停止整场——playing 信号盲区站（路飞类 iframe）的播完通道。
       if (mode === "single") endedLatchTs = now();
     }
-  }
-
-  function onAudible(audible) {
-    // tab.audible 在部分 Chrome 的 tabCapture 下不可靠，静默检测已改用
-    // offscreen 内 AnalyserNode 实测音量（tick 里），本消息仅保留协议兼容
   }
 
   // ---- 定时循环 ----
@@ -1058,7 +1054,11 @@
         onUrlChange(msg.url);
         sendResponse({ ok: true });
         break;
-      case "offscreen-audible": onAudible(!!msg.audible); sendResponse({ ok: true }); break;
+      case "offscreen-audible":
+        // 历史遗留空协议（tab.audible 方案已废，静默判定走 playing 信号）——
+        // background 侧仍发送以维持时序，此处仅应答
+        sendResponse({ ok: true });
+        break;
       case "offscreen-advance-clicked":
         // 连播点击成功 = 确定性切分点：
         // between 态 → 立即续录（早于 URL 稳定 3s 兜底，新节零丢失）；
@@ -1082,10 +1082,11 @@
         sendResponse({ ok: true });
         break;
       }
-      case "keepalive": {
+      case "offscreen-audible":
+        // 历史遗留空协议（tab.audible 方案已废，静默判定走 playing 信号）——
+        // background 侧仍发送以维持时序，此处仅应答
         sendResponse({ ok: true });
         break;
-      }
     }
   });
 })();
