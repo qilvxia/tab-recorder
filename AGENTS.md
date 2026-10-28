@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-28 · v2.8.0）
+## 当前状态（2026-10-28 · v2.8.1）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -114,8 +114,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ⏳ ~~待用户 Chrome 复验 v2.7.0~~ → **用户指令：全量代码审计（质量/安全/逻辑漏洞），审查后报告由用户定夺——报告已批准，执行第一批上架前必修**
 - ✅ v2.7.1（**审计第一批修复**：三维度并行审查报告 3高/6中安全1中+逻辑+质量，批准第一批 8 项）：**H2** schedule 补 pendingAnchors.clear()+anchorName 重置（上轮残留卡"保存中"5 分钟）；**H3** SW start 加重入守卫（session.recording 时拒绝二次开始，防 status 轮询失败误显空闲时双录制）；**S1 安全**——①撤销 session 全局 UNTRUSTED 开放（冷却查询改 advance-cooldown 消息走 SW，content-detect 失败降级直接点击语义不变）；②content-report 加 sender.tab 校验（仅录制标签页的上报生效——历史注入其他页的残留 detector 不得串扰本场+纵深防御）；**M-a** playing/advanceEntry/advanceExit 限顶层帧（与 url 同判定；广告/预加载 iframe 持续在播会阻塞停播切节与 idle-wrap 收工——三站播放器均在顶层或本就不可见，限制安全）；**M-b** pause() 补 releaseUrlBrake（刹车标志残留使恢复后同段不再刹车，尾部污染回潮）；**M-f** nextEntryVisible 补 `i` 大小写标志（Next* 类名漏检）；**Q3 死代码清理**：chunks 变量（只写不读）、offscreen keepalive case（同上下文消息不回环永不触发）、onAudible 空壳+background 每 2s 空发 offscreen-audible、keepalive 双注入冗余（files 注入+injectDetector 重复）、payload.tabTitle/courseSelector 全链（无 UI 下发恒空，content-detect course 字段/report 条件/offscreen courseFolder 来源一并删）；**Q4** AnalyserNode 失实注释修正（静默判定真源是 playing 信号）。**上架打包清单（审计新增）**：zip 排除 e2e-test.html/e2e-page.js/advance-test*（测试页不得随包上架）。验证：语法/smoke PASS
 - ✅ v2.8.0（**审计问题全量修复**，用户指令"先全部修复"——第二/三批+低项共 14 项）：**第二批逻辑**：①H1 doSplit×stopAll 竞态丢末段——doSplit 不再置 recorder=null（保留引用让 stopAll 走 stop 正常路径，inactive 幂等）；②M-c 入口信号先于 ended 作废不重臂——entryDismissedAt 记作废时刻，ended 迟到 3s 内重臂挂起；③M-d lesson 信号去抖窗内丢失——pendingLesson 清除从排队点移到 doSplit 执行点（被打断时挂起保留下轮重排）；④M-e currentLesson 震荡消除——接管时记 prevHighRank，升级路径挡**恒值回归**（B 站合集心跳不再周期夺回）；**低项**：⑤pause 竞态窗（onstop 里 paused 不开新段，pendingStartAfterResume 在 resume 补开）；⑥crop NaN 兜底（双基准无效回退帧尺寸）；⑦stopping 期 advance-clicked 置 resumeAfterBetween；⑧魔法数字入 SEG（urlInstantMinMs/stretchEpsilon/advanceFallbackMs/finishDeadlineMs/takeoverStableMs）；**安全低项**：⑨sanitize 剥 RTL 覆盖符+Windows 保留名前缀（单测过：CON→_CON）；⑩trackAnchor 匹配放宽（Chrome 重名 " (n)" 后缀）；⑪content-crop 三处 isTrusted；⑫blob URL 落定回执时 revoke（anchorURLs Map）；**质量**：⑬判定统一（offscreen isJunkName 补 NOISE_PATTERNS，与 content-detect okName 一致——不做 common.js 文件抽取：需动 4 注入点回归面大收益仅 12 行）；⑭resetContestState() 集中重置竞争/挂起类状态（schedule+startSegment 统一调用——Q1"漏重置"事故模式的实质修复，全量对象化留上架后）+popup saveSetting/isBrowserPage 去重+错误处理约定注释+内联样式入 class+术语统一。验证：全 JS 语法+sanitize 单测+smoke PASS（e2e 环境仍故障未跑，行为按推演表核对——重点回归项：切节收尾/连播点击/B 站命名/裁剪）
-- ⏳ **待用户 Chrome 复验 v2.8.0**（叠加 v2.7.0/v2.7.1 全部项）：三站分节+暂停 2 分钟无碎片+60s 收工；B 站命名；路飞 5 节+；纯音/纯视频；停止不保存；chips 高亮；手动停止恰逢切节的场景（H1 修复验证）
-- ⏳ **待用户 Chrome 复验 v2.7.1**（与 v2.7.0 七项合并）：三站分节暂停 2 分钟无碎片+60s 收工；B 站命名；路飞 5 节+命名；纯音/纯视频；停止不保存；chips 高亮
+- ⏳ ~~待用户 Chrome 复验 v2.8.0~~ → **用户复验：暂停碎片依旧（B 站 15s/YouTube 47s/路飞无）——v2.7.0 的 endedSeen 前提没治住，真根因是 URL 即刻切循环**
+- ✅ v2.8.1（**URL 切节加"本段播过"前提**——修暂停碎片循环）：碎片周期=该站 URL 变化周期的实锤定位真根因——暂停 → 停播 5s 保存节进 between → 超时/URL 恢复续录**静止段**（hasPlayed=false）→ 页面暂停态仍周期更新 URL（token/心跳参数过指纹剥除名单）→ segUrlMode 即刻切（10s 节流后）→ 静止画面碎片 → 循环；每次循环重置 idleWrap 收工计时永不收工。路飞不勾 URL 模式（否决拦截）/单段无切节 → 无碎片，三站差异吻合。修：即刻切分支加 `lastPlayingTs > segStartAt`（本段确实播过才认 URL 变化为换内容）——暂停静止段不切（由 idleWrap 60s 收工，续播时 playing 刷新即解除）；真换课瞬间旧内容在播恒成立不受影响；开录未播更保守。between 的 URL 稳定恢复不加前提（恢复良性，恢复后录静止画面交收工不产碎片）。验证：语法/smoke PASS（真实暂停场景靠用户复验）
+- ⏳ **待用户 Chrome 复验 v2.8.1（重点）**：B 站/YouTube 勾 URL 模式分节录制中**暂停视频 2 分钟**——应只有暂停时刻保存的那一节（正常大文件），无 15s/47s 碎片，60s 后自动收工；**暂停 1 分钟内点续播**——继续录制无缝；正常连播切 P 不受影响；其余 v2.7.0-v2.8.0 复验项继续
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成）→ ⏳ 上架流程
 - ⏳ 上架流程未开始
 

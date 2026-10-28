@@ -794,6 +794,10 @@
     // 10s 节流防 URL 抖动碎切：未到间隔退回稳定期路径（挂起保留重试）。
     if (settings.segUrlMode && pendingUrl && now() - lastUrlChangeAt >= SEG.urlInstantMinMs
         && state === "recording" && now() - lastSplitAt >= SEG.minSplitGapMs
+        && lastPlayingTs > segStartAt // 本段确实播过才认 URL 变化为换内容（用户复验实锤：
+        // B 站/YouTube 暂停后页面仍周期更新 URL——token/心跳参数每次都过指纹；静止段的
+        // URL 变化切出去就是碎片循环，周期=该站 URL 变化周期（B 站 ~15s/YouTube ~47s），
+        // 且每次循环重置收工计时。真换课瞬间旧内容在播，本前提恒成立不受影响）
         && cur && cur.bytes >= SEG.idleDiscardBytes) {
       pendingUrl = "";
       resumeAfterBetween = true;
