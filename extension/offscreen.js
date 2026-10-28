@@ -794,10 +794,9 @@
     // 10s 节流防 URL 抖动碎切：未到间隔退回稳定期路径（挂起保留重试）。
     if (settings.segUrlMode && pendingUrl && now() - lastUrlChangeAt >= SEG.urlInstantMinMs
         && state === "recording" && now() - lastSplitAt >= SEG.minSplitGapMs
-        && lastPlayingTs > segStartAt // 本段确实播过才认 URL 变化为换内容（用户复验实锤：
-        // B 站/YouTube 暂停后页面仍周期更新 URL——token/心跳参数每次都过指纹；静止段的
-        // URL 变化切出去就是碎片循环，周期=该站 URL 变化周期（B 站 ~15s/YouTube ~47s），
-        // 且每次循环重置收工计时。真换课瞬间旧内容在播，本前提恒成立不受影响）
+        && lastPlayingTs > segStartAt // 本段播过才认 URL 变化为换内容：真换集（切 P）
+        // 时旧内容在播恒成立；静止段的 URL 变化（diag_pause_page 实测暂停态
+        // 顶层 URL 零变化，此前提主要防识别/恢复边缘期的杂音）不构成切分依据
         && cur && cur.bytes >= SEG.idleDiscardBytes) {
       pendingUrl = "";
       resumeAfterBetween = true;
@@ -1140,7 +1139,14 @@
           //（原直接丢弃会退化为 30s 超时恢复，新节开头多等半分钟——审计低项）
           if (pauseAfterStop) resumeAfterBetween = true;
         } else if (state === "recording" && mode === "segment"
-                   && cur && cur.bytes >= SEG.idleDiscardBytes) {
+                   && cur && cur.bytes >= SEG.idleDiscardBytes
+                   // 本段播过才认连播完成点击（暂停碎片根因，diag_pause 实锤）：
+                   // 暂停态页面 URL 零变化、playing 静止，唯一的切段源是连播
+                   // 点击链自持循环（切段→广播→冷却期满点暂停控制栏的 next 按钮
+                   // →advance-clicked→又切段），周期 ≈ 点击冷却 15s+1s（B 站实测
+                   // 16.0s 一个静止画面碎片）。真连播点击发生时旧节在播，本前提
+                   // 恒成立；静止段的点击不构成「播完换内容」的切分依据
+                   && lastPlayingTs > segStartAt) {
           resumeAfterBetween = true;
           finishSegmentForAdvance("advance-clicked");
         }

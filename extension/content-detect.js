@@ -126,10 +126,27 @@
   // 可能重复执行——15 秒内任何帧点过即跳过（跨帧共享 session 状态），防跳课
   let lastClickAt = 0;
   const ADV_CLICK_COOLDOWN = 15000;
+  let lastPauseSkipLog = 0; // 暂停守卫日志节流（九轮定时器每轮触发，30s 一条防刷屏）
+  // 本帧视频自上次开播以来播完过（ended 事件；播放器人工派发的 ended 也算——
+  // video.ended 属性在 srcObject/重置场景不可靠）。播完后的暂停在等连播点击，
+  // 不是用户暂停；playing 恢复时清除。无陈旧解除：播完弹窗停留多久都该点
+  let endedArmed = false;
 
   function attemptAdvance() {
-    for (const v of document.querySelectorAll("video")) {
-      if (!v.paused && !v.ended) return; // 本帧已有视频在播，无需连播
+    const vids = [...document.querySelectorAll("video")];
+    if (vids.some((v) => !v.paused && !v.ended)) return; // 本帧已有视频在播，无需连播
+    // 纯暂停守卫（暂停碎片第一道防线，diag_pause 实锤）：本帧存在 video、全部
+    // 「已暂停且未播完」且从未播完过（endedArmed）= 用户暂停等待。连播点击只
+    // 服务「播完去下一节」，暂停态点击 pause 控制栏常驻的 next 类按钮（点击无
+    // 导航效果也回报 advance-clicked）会每 15s 冷却期满切一个静止画面碎片
+    //（B 站实测 16.0s 自持循环），next 真有效时还会跳课。帧内无 video（跨域
+    // 播放器顶层帧等信号盲区站点）不拦——连播兜底点击照常
+    if (vids.length && vids.every((v) => v.paused && !v.ended) && !endedArmed) {
+      if (Date.now() - lastPauseSkipLog > 30000) {
+        lastPauseSkipLog = Date.now();
+        logAdvance("自动连播：视频暂停中，跳过连播点击");
+      }
+      return;
     }
     if (Date.now() - lastClickAt < ADV_CLICK_COOLDOWN) return; // 本帧冷却
     // 冷却查询走消息（session 已不对 UNTRUSTED 上下文开放——审计 S1）；
@@ -363,11 +380,13 @@
       v.addEventListener("ended", () => {
         last.ended = true;
         last.endedAt = Date.now();
+        endedArmed = true; // 播完后的暂停不是用户暂停（连播守卫依据，无陈旧解除）
         report();
         scheduleAdvance(); // 分节模式：播完自动尝试播放下一节
       });
       v.addEventListener("playing", () => {
         cancelAdvance(); // 视频恢复播放，无需连播
+        endedArmed = false; // 重新开播后的暂停才是真暂停
         if (last.ended) { last.ended = false; report(); }
       });
     });

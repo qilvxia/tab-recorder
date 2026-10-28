@@ -6,3 +6,5 @@
 *.zip
 .diag-bili-profile/
 .diag-*-out.txt
+.diag-pause-profile/
+.diag-pausepage-profile/
