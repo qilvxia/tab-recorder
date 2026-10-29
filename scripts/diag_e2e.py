@@ -146,7 +146,10 @@ def main():
             time.sleep(1)
             grant_via_hotkey(proc, sw)
         blind = "--blind" in sys.argv
-        tab_url = "chrome.runtime.getURL('e2e-test.html')" + ("+'#blind'" if blind else "")
+        blind2 = "--blind2" in sys.argv
+        blind3 = "--blind3" in sys.argv
+        btag = "#blind" if blind else ("#blind2" if blind2 else ("#blind3" if blind3 else ""))
+        tab_url = "chrome.runtime.getURL('e2e-test.html')" + (("+%r" % btag) if btag else "")
         tab_id = sw.eval(
             "chrome.tabs.create({url:%s, active:true}).then(t=>t.id)" % tab_url,
             await_promise=True)
@@ -176,7 +179,10 @@ def main():
             "chrome.offscreen.createDocument({url:'offscreen.html',reasons:['USER_MEDIA'],justification:'e2e'}).catch(()=>{})",
             await_promise=True)
         time.sleep(1.5)
-        wrap = 20 if blind else 15
+        # blind3 用长 wrap（90s > 45s 兜底间隔）：短 wrap 会先收工掐断自持循环，
+        # 用户真实场景 wrap=120s > 45s，循环才会显现。blind2 用 40s：弹窗间隔
+        # 15s+SPA 改名 8s+切节处理，20s 会先收工掐断第 3 课
+        wrap = 90 if blind3 else (40 if blind2 else (20 if blind else 15))
         payload_js = ("payload:{mode:'single',fileName:'单段诊断',presetSeconds:%d,startDelaySeconds:0,tabTitle:'e2e',tabUrl:''}"
                       % (20 if "--preset" in sys.argv else 0)
                       if single else
@@ -192,7 +198,7 @@ def main():
         print("录制启动:", resp)
 
         # 采样：单段 50s（30s 播放 + 5s 停播/ended 锁存 + 收尾落盘）；分节 150s（30s×3 节）；盲区 90s（8s 弹窗+3s 切节+20s 收工+余量）
-        for i in range(25 if single else (45 if blind else 75)):
+        for i in range(25 if single else (45 if (blind or blind2 or blind3) else 75)):
             time.sleep(2)
             try:
                 st = sw.eval(
@@ -201,9 +207,10 @@ def main():
                     "  const a = await chrome.storage.session.get('advanceLog');"
                     "  const d = await chrome.downloads.search({});"
                     "  return JSON.stringify({state:s.state, seg:s.segCount, lastSplit:s.lastSplit,"
-                    "    bytes:s.bytes, adv:(a.advanceLog||[]).length, files:d.filter(x=>x.filename.includes('e2e')).map(x=>x.filename.split('\\\\').pop())});"
+                    "    bytes:s.bytes, adv:(a.advanceLog||[]).length, files:d.filter(x=>x.filename.includes('e2e')).map(x=>x.filename.split('\\\\').pop()),"
+                    "    dbg:s.dbg});"
                     "})()", await_promise=True)
-                pg = pc.eval("JSON.stringify({clicked:window.__clicked||0, hash:location.hash, lesson:(window.__lessonNum?window.__lessonNum():0), playErr:window.__playErr||''})")
+                pg = pc.eval("JSON.stringify({clicked:window.__clicked||0, hash:location.hash, lesson:(window.__lessonNum?window.__lessonNum():0), b2:(window.__b2ListText?window.__b2ListText():''), playErr:window.__playErr||''})")
                 print("[%02ds] offscreen=%s | page=%s" % ((i + 1) * 2, st, pg))
             except Exception as e:
                 print("[%02ds] 采样异常: %s" % ((i + 1) * 2, str(e)[:120]))

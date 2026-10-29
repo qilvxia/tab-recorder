@@ -679,6 +679,21 @@
       viewportDrift,
       urlLog: urlLog.slice(-2),
       error: startError,
+      // 竞争/收工内部量（观测面：面板与诊断脚本直接读数定位命名与收工问题，
+      // 免开 F12——路飞双盲区站自动化进不去，用户 Chrome 一场复验即可定位）
+      dbg: {
+        currentLessonSrc,
+        pendingLesson,
+        pendingLowerRank: pendingLowerRank && { name: pendingLowerRank.name, src: pendingLowerRank.src },
+        prevHighRank,
+        hasPlayedEver,
+        everBetween,
+        endedReportedEver,
+        endedSeen,
+        wrapLeft: (Number(settings.silenceWrapSeconds) > 0 && mode === "segment" && state === "recording" && resumeTs)
+          ? Math.max(0, Number(settings.silenceWrapSeconds) * 1000 - (now() - resumeTs))
+          : null,
+      },
     };
   }
 
@@ -787,6 +802,19 @@
 
   // tick 周期检查：URL/课时名挂起变化的稳定期判定（被全局闸拒绝时保留挂起，下轮重试）
   function checkPendingSplits() {
+    // 降级挂起到期结算（接管不再依赖下一次同值上报——上报周期 6s 会让接管
+    // 落后于切节落盘，blind2 取证实锤第 3 段名卡主值）。挂起期间高 rank 值
+    // 一旦真变化，applyLessonReport 正常路径会撤挂起（L935），此处只结算
+    // 「稳定 2s 且未变」的挂起——与原语义一致
+    if (pendingLowerRank && now() - pendingLowerRank.at >= SEG.takeoverStableMs) {
+      console.info("[rec] 降级源稳定接管（到期结算）:", pendingLowerRank.src, pendingLowerRank.name);
+      const lk = pendingLowerRank;
+      pendingLowerRank = null;
+      prevHighRank = { name: currentLesson, src: currentLessonSrc }; // 记被替代值：恒值回归防护
+      currentLesson = lk.name;
+      currentLessonSrc = lk.src;
+      if (state === "recording" && mode === "segment" && cur && cur.name !== lk.name) cur.name = lk.name;
+    }
     if (state === "between") {
       // 节间等待：跳转成功（URL 稳定）→ 重新捕获续录（seq 与识别延续）
       if (pendingUrl && now() - lastUrlChangeAt >= SEG.urlStableMs) {
@@ -845,8 +873,10 @@
       // 稳定后仍是新值（未被抖回/再变）才切；与本段同名说明只是同课重复上报。
       // 实质内容前提：当前段太小（开录识别收敛、连播丢弃清缓冲后）不值得单独成
       // 文件——只更新段名，小段并入后续内容；段已有实质内容才真正切段。
+      // p===currentLesson 前提（blind2 dbg 实锤）：p 过时（接管已把 currentLesson
+      // 更新为低优源新值，挂起里还是旧主值）时写回会覆盖接管结果——段名卡主值
       if (cur && cur.bytes < SEG.minLessonSplitBytes) {
-        if (cur.name !== p) { console.info("[rec] 段内容不足，lesson 变化只改名:", p); cur.name = p; }
+        if (p === currentLesson && cur.name !== p) { console.info("[rec] 段内容不足，lesson 变化只改名:", p); cur.name = p; }
         pendingLesson = "";
         return;
       }
@@ -858,6 +888,16 @@
       // 去抖 1.5s 窗内若被 stopAll（清 splitTimer）/ pause（doSplit 拒绝）打断，
       // 挂起保留由下轮 tick 重新排队，防换课信号丢失致两课并一文件
       if (requestSplit("lesson-change")) { /* 挂起保留，doSplit 成功时清 */ }
+      } else if (p === currentLesson && cur && cur.name && cur.name !== p) {
+        // 段名滞后于识别（blind2 复现实锤）：SPA 无 URL 变化的换课上，旧值先经
+        // 快照填进段名，新课名沿被 applyLessonReport 的段名改写前提挡住只挂起，
+        // 到这里又被 URL 联动闸丢弃 → 段名永久卡在场内首个识别值（路飞 5 课
+        // 全名第一课）。同源识别值序列=同一内容粒度（p===currentLesson 即
+        // applyLessonReport 已裁决接受的新值）→ 只改名**不切节**：URL 联动闸
+        // 仍守切节，名字不再被丢
+        console.info("[rec] 段名滞后于识别，只改名（URL 未变不切节）:", p);
+        cur.name = p;
+        pendingLesson = "";
       } else {
         pendingLesson = "";
       }
@@ -888,17 +928,11 @@
     const rank = SRC_RANK[src] || 0;
     const curRank = SRC_RANK[currentLessonSrc] || 0;
     if (currentLesson && rank < curRank) {
-      // 来源降级：挂起观察（见函数头②）——稳定 2s 且高 rank 未变则接管
-      if (pendingLowerRank && pendingLowerRank.name === name && pendingLowerRank.src === src) {
-        if (now() - pendingLowerRank.at >= SEG.takeoverStableMs) {
-          console.info("[rec] 降级源稳定接管（高 rank 值未随内容变化）:", src, name);
-          pendingLowerRank = null;
-          prevHighRank = { name: currentLesson, src: currentLessonSrc }; // 记被替代值：恒值回归防护
-          currentLesson = name;
-          currentLessonSrc = src;
-          if (cur && cur.name !== name) cur.name = name;
-        }
-      } else {
+      // 来源降级：挂起观察（见函数头②）——稳定 2s 且高 rank 未变则接管。
+      // **接管结算在 checkPendingSplits 的到期检查**（tick 每 500ms）——原实现
+      // 依赖「下一次同值上报」结算，而 alt 沿消费后只剩 6s 周期的 forceReport，
+      // 接管落后于切节落盘（blind2 实锤：第 3 段落盘名仍是主值）
+      if (!(pendingLowerRank && pendingLowerRank.name === name && pendingLowerRank.src === src)) {
         pendingLowerRank = { name, src, at: now() };
       }
       return;
@@ -1107,8 +1141,11 @@
       return;
     }
     if (now() - pendingEntryAt < SEG.entryStableMs) return;
+    // 段内容前提：不足时**保留挂起**（blind2 取证实锤）——原实现清挂起后弹窗
+    // 常驻可见不再有变化沿，通道死到 45s 兜底（切节多等半分钟）；保留挂起等
+    // bytes 攒够后下一轮直接切，防误切前提（变化沿+稳定期）不变
+    if (cur && cur.bytes < SEG.idleDiscardBytes) return;
     pendingEntryAt = 0;
-    if (cur && cur.bytes < SEG.idleDiscardBytes) return; // 段无实质内容（开录初期常驻元素首报）不停录
     console.info("[rec] 连播入口持续可见 → 停录进节间");
     finishSegmentForAdvance("entry-visible");
   }

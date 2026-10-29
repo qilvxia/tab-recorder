@@ -388,6 +388,10 @@ function render(st) {
   if (st.signals) {
     tips.push(`播放信号：${st.signals.hasPlayed ? "✓ 已到达" : "✗ 未收到（停播判定不启用，播完靠弹窗入口信号）"}`);
   }
+  if (st.dbg) {
+    if (st.dbg.wrapLeft != null) tips.push(`无播放收工倒计时：${Math.ceil(st.dbg.wrapLeft / 1000)}s`);
+    if (st.dbg.pendingLesson) tips.push(`待确认课时名：${st.dbg.pendingLesson}`);
+  }
   if (st.lastSplit) {
     const d = new Date(st.lastSplit.at);
     const p2 = (v) => String(v).padStart(2, "0");
