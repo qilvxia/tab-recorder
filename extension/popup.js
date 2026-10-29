@@ -389,7 +389,11 @@ function render(st) {
     tips.push(`播放信号：${st.signals.hasPlayed ? "✓ 已到达" : "✗ 未收到（停播判定不启用，播完靠弹窗入口信号）"}`);
   }
   if (st.dbg) {
-    if (st.dbg.wrapLeft != null) tips.push(`无播放收工倒计时：${Math.ceil(st.dbg.wrapLeft / 1000)}s`);
+    if (st.dbg.wrapStatus && st.dbg.wrapStatus.left != null) {
+      tips.push(`无播放收工倒计时：${Math.ceil(st.dbg.wrapStatus.left / 1000)}s`);
+    } else if (st.dbg.wrapStatus && st.dbg.wrapStatus.blocked) {
+      tips.push(`收工延迟：${st.dbg.wrapStatus.blocked}`);
+    }
     if (st.dbg.pendingLesson) tips.push(`待确认课时名：${st.dbg.pendingLesson}`);
   }
   if (st.lastSplit) {

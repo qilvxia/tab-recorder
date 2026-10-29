@@ -138,7 +138,7 @@
 
   function attemptAdvance() {
     const vids = [...document.querySelectorAll("video")];
-    if (vids.some((v) => !v.paused && !v.ended)) return; // 本帧已有视频在播，无需连播
+    if (anyPlaying()) return; // 主视频在播，无需连播（主视频化：浮层预览在播不算——播完场景浮层不挡弹窗点击）
     // 纯暂停守卫（暂停碎片第一道防线，diag_pause 实锤）：本帧存在 video、全部
     // 「已暂停且未播完」、从未播完过（endedArmed）且曾真的在播过（playingSeen）
     // = 用户暂停等待。连播点击只服务「播完去下一节」，暂停态点击 pause 控制
@@ -280,7 +280,7 @@
     '[aria-current="true" i]', '[aria-current="page" i]',
     'li[class*="active" i] a', 'a[class*="active" i]',
     'li[class*="current" i] a', 'a[class*="current" i]',
-    'li[class*="on"] a', '[class*="playing" i]:not(video)',
+    'li[class~="on"] a', '[class*="playing" i]:not(video)',
     'dd[class*="active" i]', '[class*="active" i]',
     '[selected]:not(option)', '[aria-selected="true" i]:not(option)',
   ];
@@ -399,10 +399,19 @@
 
   // 本帧是否有视频正在播放（供 offscreen 的"停播静默"切节判定）
   function anyPlaying() {
-    for (const v of document.querySelectorAll("video")) {
-      if (!v.paused && !v.ended) return true;
+    // 主视频判定（v2.8.6）：取可视面积最大的 video——暂停页的推荐浮层预览
+    // 小窗自动播不算"页面在播"（否则 playing 心跳持续，停播切节与无播放收工
+    // 被浮层永久阻塞，用户实锤三站收工失效的主因之一）；主视频 paused 即停播
+    const vids = document.querySelectorAll("video");
+    let main = null, best = 0;
+    for (const v of vids) {
+      const r = v.getBoundingClientRect();
+      if (r.width > 0 && r.height > 0 && r.width * r.height > best) {
+        best = r.width * r.height;
+        main = v;
+      }
     }
-    return false;
+    return !!main && !main.paused && !main.ended;
   }
 
   // 连播入口可见性（播完弹窗类信号，offscreen 用于"播完即停录"）：class 启发式

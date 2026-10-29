@@ -93,6 +93,7 @@
   //   resumeTs 在 startSegment 开录也会赋值，仅凭它非 null 会在「正常播放中」
   //   （playing 不可见、课时内无 URL 变化、无切节）误收工；卡弹窗场景必然
   //   经历过 between（弹窗→entry-visible/between→恢复→弹窗还在），此前提精确圈定
+  let recStartTs = 0; // 本场开录时刻（v2.8.6：盲区站纯暂停的收工 2×wrapSec 兜底基准）
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -496,6 +497,7 @@
     endedSeen = false;
     endedReportedEver = false; // 站点能力探测按场重置（新一场重新探测 ended 可达性）
     everBetween = false; // 盲区站收工前提按场重置
+    recStartTs = now(); // 盲区站纯暂停收工的 2×wrapSec 兜底基准
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
                          // 导致全局闸从开录起失效——开录静默误切节、占闸挤掉真播完信号）
     resetContestState(); // 竞争/挂起类集中重置（含 prevHighRank/entryDismissedAt 等）
@@ -690,9 +692,7 @@
         everBetween,
         endedReportedEver,
         endedSeen,
-        wrapLeft: (Number(settings.silenceWrapSeconds) > 0 && mode === "segment" && state === "recording" && resumeTs)
-          ? Math.max(0, Number(settings.silenceWrapSeconds) * 1000 - (now() - resumeTs))
-          : null,
+        wrapStatus, // {left:ms}|{blocked:原因}|null——与 idleWrapCheck 判定同源
       },
     };
   }
@@ -1095,31 +1095,35 @@
   // 的缺口——恢复续录后持续无播放（lastPlayingTs < resumeTs = 续录以来页面从未
   // 在播）超过阈值 → 结束整场。hasPlayed 门槛天然豁免 playing 盲区站（路飞：
   // hasPlayed 恒 false，收工判定不启用——其连播工作良好，挂了用户手点停止）。
+  // 分节静默收工：连播全部失效（课程放完/站点连播挂）时补 between 循环永不结束
+  // 的缺口——恢复续录后持续无播放（lastPlayingTs < resumeTs = 续录以来页面从未
+  // 在播）超过阈值 → 结束整场。
+  let wrapStatus = null; // 收工判定真实状态（观测对齐 v2.8.6：面板倒计时与判定
+  //   同源——{left:ms} 计时中 | {blocked:原因} 被挡 | null 未启用/已触发）
   function idleWrapCheck() {
     const wrapSec = Number(settings.silenceWrapSeconds) > 0 ? Number(settings.silenceWrapSeconds) : 0;
-    if (!wrapSec || mode !== "segment" || state !== "recording") return;
-    if (!resumeTs) return;
-    // resumeTs 基准：只在经历过节间恢复后启用（卡弹窗必然经过 between；开录
-    // 未播 resumeTs=null 不收工，维持既有行为不引入误伤）
+    if (!wrapSec || mode !== "segment" || state !== "recording" || !resumeTs) { wrapStatus = null; return; }
     if (hasPlayedEver) {
-      // playing 可见站：续录后从未在播 → 收工。豁免判定用 hasPlayedEver（曾收到
-      // 过 playing，between 不重置）——不用 hasPlayed，它进 between 时被重置
-      //（恢复段永远 hasPlayed=false 会让收工判定永不启用，e2e 实测抓到的缺陷）
-      if (lastPlayingTs >= resumeTs) return; // 续录后见过播放（连播成功/误报恢复），不收工
-      if (now() - resumeTs < wrapSec * 1000) return;
+      // playing 可见站：续录后从未在播 → 收工（playing 已主视频化——暂停页的
+      // 推荐浮层预览小窗自动播不再产生心跳，用户实锤的收工失效主因之一）
+      if (lastPlayingTs >= resumeTs) { wrapStatus = { blocked: "页面在播" }; return; }
+      const left = wrapSec * 1000 - (now() - resumeTs);
+      if (left > 0) { wrapStatus = { left }; return; }
+      wrapStatus = null;
       stopAll("idle-wrap");
       return;
     }
     // playing 盲区站（路飞 hasPlayedEver 恒 false）：playing 不可见，「无播放」
-    // 用两个前提圈定——① everBetween（经历过节间：卡弹窗场景必然弹窗→entry-
-    // visible→between→恢复→弹窗还在；正常播放中无 between 不收工，防误杀）；
-    // ② 恢复续录后 wrapSec 内 URL 无变化且无切节（真连播跳转必然带来二者之一）
-    // = 连播已挂（弹窗点不掉/课程放完）→ 收工。原豁免设计（盲区站永不收工）
-    // 在 v2.8.2 连播防护引入后不再成立：防护盲区豁免让点击通道恢复，但站点
-    // 改版/弹窗 DOM 变化仍可能卡死，需要兜底
-    if (!everBetween) return;
-    if (lastUrlChangeAt >= resumeTs || lastSplitAt >= resumeTs) return; // 有跳转/切节活动，连播仍在工作
-    if (now() - resumeTs < wrapSec * 1000) return;
+    // 用活动代理信号——恢复续录后 wrapSec 内 URL 无变化且无切节（真连播跳转
+    // 必然带来二者之一）= 连播已挂（弹窗点不掉/课程放完）→ 收工。
+    // everBetween 前提放宽（v2.8.6）：纯暂停（无弹窗无切节、从未进过 between）
+    // 从开录起 2×wrapSec 兜底——原前提使纯暂停场景收工永不启用（用户实锤）；
+    // 2 倍宽限防开录慢的用户被误收
+    if (lastUrlChangeAt >= resumeTs || lastSplitAt >= resumeTs) { wrapStatus = { blocked: "有跳转/切节活动" }; return; }
+    const base = everBetween ? resumeTs : Math.max(resumeTs, recStartTs + wrapSec * 1000);
+    const left = wrapSec * 1000 - (now() - base);
+    if (left > 0) { wrapStatus = { left }; return; }
+    wrapStatus = null;
     stopAll("idle-wrap");
   }
 
@@ -1216,10 +1220,13 @@
                    // →advance-clicked→又切段），周期 ≈ 点击冷却 15s+1s（B 站实测
                    // 16.0s 一个静止画面碎片）。真连播点击发生时旧节在播，本前提
                    // 恒成立；静止段的点击不构成「播完换内容」的切分依据。
-                   // 盲区豁免（!hasPlayedEver）：playing 信号不可见站点（保利威类）
-                   // lastPlayingTs 恒 0，本前提会把点击切分整场锁死——信任点击
-                   //（v2.3.5 确定性切分点语义）
-                   && (lastPlayingTs > segStartAt || !hasPlayedEver)) {
+                   //（v2.8.4 曾加 `|| !hasPlayedEver` 盲区豁免，v2.8.6 删除：doClick
+                   // 的"成功"只代表找到可见元素（点击无导航效果也回报），盲区站
+                   // 信任点击=循环燃料（用户 Chrome 实锤 advance-clicked 每 ~15s
+                   // 切一个静止碎片）。盲区站连播恢复不依赖点击切分——走 between
+                   // 态 resumeCapture（entry-visible 切节→between→广播→点击→恢复，
+                   // v2.8.4 blind e2e 验证过的链路）
+                   && lastPlayingTs > segStartAt) {
           resumeAfterBetween = true;
           finishSegmentForAdvance("advance-clicked");
         }
