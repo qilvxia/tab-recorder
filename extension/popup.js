@@ -319,14 +319,18 @@ async function runRecognitionDiag() {
       }
       return { url: location.href.slice(0, 100), videos, btns, playbackState: (navigator.mediaSession && navigator.mediaSession.playbackState) || "" };
     };
-    const [res] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id, allFrames: true }, func: frameProbe });
-    const frames = (res || []).filter((f) => f.result).map((f) => f.result);
+    // executeScript Promise 形式返回 InjectionResult[]（v2.8.11 修：曾误用
+    // const [res] 解构成单个对象，后续 .filter 抛 TypeError）
+    const res = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id, allFrames: true }, func: frameProbe });
+    const injResults = (res || []).filter((f) => f.result);
     // currentTime 双采样：间隔 2s 再采一轮，标注每帧每 video 是否推进（播放铁证）
     await new Promise((r) => setTimeout(r, 2000));
-    const [res2] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id, allFrames: true }, func: frameProbe });
-    const frames2 = (res2 || []).filter((f) => f.result).map((f) => f.result);
-    const report = frames.map((fr, i) => {
-      const fr2 = frames2[i] || {};
+    const res2 = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id, allFrames: true }, func: frameProbe });
+    // 按 frameId 对齐两轮采样（帧顺序理论可变，不依赖数组索引）
+    const res2ByFrame = new Map(((res2 || [])).filter((f) => f.result).map((f) => [f.frameId, f.result]));
+    const report = injResults.map((inj) => {
+      const fr = inj.result;
+      const fr2 = res2ByFrame.get(inj.frameId) || {};
       const videos = (fr.videos || []).map((v, j) => {
         const v2 = (fr2.videos || [])[j] || {};
         return { ...v, advanced: typeof v2.t === "number" && v2.t > v.t ? `推进 ${v.t}→${v2.t}` : `未推进 ${v.t}→${v2.t ?? "?"}` };

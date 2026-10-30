@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-29 · v2.8.10）
+## 当前状态（2026-10-29 · v2.8.11）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -137,6 +137,8 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ⏳ **待用户提供路飞播放中的「识别诊断」采集结果**：按 currentTime 推进帧的实锤修 playing 信号（currentTime 推进检测或跨域帧注入修复）→ 盲区分支退役，全链路正常信号驱动
 - ⏳ ~~待用户提供路飞播放中诊断结果~~ → **用户实测报错**：「采集失败：Error in invocation of scripting.executeScript...」——v2.8.9 交付包里的 bug
 - ✅ v2.8.10（**诊断按钮参数修复**）：`allFrames: true` 被误放在 executeScript 选项顶层（popup.js:322/326）——MV3 参数校验要求它是 `target` 的属性。修：`target: {tabId, allFrames: true}`。**验证**：新增 scripts/check_allframes.py（SW 级形态测试——无手势时 host 权限拒绝=预期，错误类型证明参数校验通过；用户场景 popup 点击已授予 activeTab）；smoke PASS
+- ⏳ ~~v2.8.10 复验~~ → **用户实测第二层报错**：「采集失败：(res || []).filter is not a function」——参数修复后暴露解构 bug
+- ✅ v2.8.11（**诊断按钮解构 bug 修复 + node 单测护航**）：executeScript Promise 形式返回 InjectionResult[]，popup.js 误用 `const [res]` 解构成单个对象 → 后续 .filter 抛 TypeError；且首轮修复代码还叠了第二层（frames 已 map 成 result 又取 inj.result=undefined）——**node 迷你单测先于用户抓到**（模拟 InjectionResult[] 跑 report 构建逻辑）。修：保留 InjectionResult 数组 + 按 frameId 对齐双采样（帧顺序理论可变，不依赖索引）。验证：单测 PASS（帧数/推进标注/frameId 对齐/按钮）+ smoke PASS
 - ⏳ **上架流程（材料阶段）**：包已就绪（v2.8.6 重新打包）；剩余开发者后台材料——商店描述文案、隐私声明（零数据收集 + 权限用途逐条：tabCapture/offscreen/downloads/storage/scripting/activeTab）、截图
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成，**用户验收通过**）→ ⏳ 上架流程（v2.8.3 包已生成，材料阶段）
 
