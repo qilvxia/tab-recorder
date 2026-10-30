@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-29 · v2.8.7）
+## 当前状态（2026-10-29 · v2.8.8）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -129,6 +129,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ⏳ ~~待用户 Chrome 复验 v2.8.6~~ → **用户复验：①路飞命名仍恒第一课（来源=目录高亮；全程从未出现「媒体元数据」——mediasession 信号已死）②三站收工实现但双倍（设 30s 实际 60s）**
 - ✅ v2.8.7（**收工双倍修复 + 路飞命名取证工具**）：**①双倍实锤（v2.8.6 设计错误自查）**——盲区分支基准 `recStartTs+wrapSec` 使纯暂停从开录算 2×wrapSec；修：base=resumeTs（恢复续录/纯暂停两场景都从各自基准走 wrapSec，设多久就多久），删 recStartTs 死代码；**B 站暂停回归直接验证：96.2s=恢复36.1s+60s 单倍精确**。**②路飞命名**——考古实锤 v2.5.4（用户"之前正常"的版本）第 7 项选择器同样是坏的，那时命名靠媒体元数据（现已死），目录高亮从未真正工作过；v2.8.6 只修了第 7 项 "on" 词匹配，前 5 项 `class*="active"/"current"` 子串仍在（容器 class 含 active 子串 → `li[class*="active"] a` 命中容器下第一个条目=恒第一课）。无 DOM 不盲修，交付两件：**popup「识别诊断」按钮**（executeScript 采集逐选择器命中明细进剪贴板——扩展消息通道，路飞 console.clear 反调试管不着；对今后任何站点命名问题可复用）+ **通用加固**（pickActiveListItem 跳过容器型命中：含 ≥2 个可见 li/a/dd 子条目的元素是列表容器不是当前条目，容器值=恒第一课的机制）。**diag_bili.py 同步**（第 7 项词匹配 + okName 补 NOISE_PATTERNS——v2.8.6 漏改）。**diag_pause.py 代理改条件式**（代理 127.0.0.1:7897 挂掉时把 B 站也拖成 error page——仅外网站点加 --proxy-server）。**验证**：blind2 三段全名/blind/正常 e2e 三节三文件/B 站暂停 96.2s 单倍收工零碎片/smoke 全 PASS
 - ⏳ **待用户 Chrome 复验 v2.8.7**：三站暂停收工（倒计时起点=设定值，30s=30s）；B 站暂停无碎片；**路飞页面点「识别诊断」按钮 → 把剪贴板结果粘贴回来**（第二轮按实锤精确修选择器）
+- ⏳ ~~待用户 Chrome 复验 v2.8.7~~ → **用户提供「识别诊断」采集 JSON 实锤**：唯一命中选择器=第 10 项子串版 `[class*="active" i]`，命中元素 `div.section.unactive`（路飞章节条目 class 是 **active/unactive 二态**——"unactive" 含 "active" 子串，全部章节条目都命中，DOM 序第一个=第 1 课）；当前节 class=section.active 排在其后永远轮不到；3 个控件误命中（collect-inactive/switch-active/active-tab）全被黑名单拦下；mainVal 空证实 mediasession 已死
+- ✅ v2.8.8（**路飞命名精确修复——词匹配 `[class~="active" i]`**）：unactive 是一个完整词 ≠ active 词（完整词匹配排除全部非当前节），active 词唯一命中当前节 div.section.active；子串版保留在后作兜底（防 "is-active" 连字符复合词站点）。**同步三处镜像**：popup 诊断脚本内嵌 ACTIVE_SELS、diag_bili.py PROBE_JS + 代理改条件式（diag_pause 同款问题：代理挂掉时 B 站也 error page）。**验证（5/5 全自动化 PASS）**：blind2 三段全名（b2List "pod-item active" 走词匹配、竞争链无恙）/blind 收工/正常 e2e 三节三文件/B 站暂停 96.2s 单倍收工零碎片/smoke
+- ⏳ **待用户 Chrome 复验 v2.8.8**：路飞分节连录第 2 课起文件名随切课变化（当前节 div.section.active 词匹配唯一命中 → alt 接管命名）；连播不回归（弹窗仍自动关）；若仍不对点「识别诊断」再采一份（应能看到 active 项命中详情）
 - ⏳ **上架流程（材料阶段）**：包已就绪（v2.8.6 重新打包）；剩余开发者后台材料——商店描述文案、隐私声明（零数据收集 + 权限用途逐条：tabCapture/offscreen/downloads/storage/scripting/activeTab）、截图
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成，**用户验收通过**）→ ⏳ 上架流程（v2.8.3 包已生成，材料阶段）
 

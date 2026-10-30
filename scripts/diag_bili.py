@@ -31,7 +31,7 @@ PROBE_JS = r"""(() => {
 
   // 逐选择器采样（镜像 v2.5.4 ACTIVE_SELS 优先级逐个查询）：每级列出前 5 个命中的
   // class/文本/校验四元组——直接看到「哪一级返回了什么」，断点即现
-  const ACTIVE_SELS = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class~="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[class*="active" i]','[selected]:not(option)','[aria-selected="true" i]:not(option)'];
+  const ACTIVE_SELS = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class~="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[class~="active" i]','[class*="active" i]','[selected]:not(option)','[aria-selected="true" i]:not(option)'];
   const perSel = [];
   for (const sel of ACTIVE_SELS) {
     let hits = [];
@@ -166,9 +166,10 @@ def main():
         "--window-size=1400,900", "--window-position=20,20",
         "--no-first-run", "--no-default-browser-check",
         "--autoplay-policy=no-user-gesture-required",
-        "--proxy-server=" + PROXY,
         url,
     ]
+    if "bilibili.com" not in host:
+        args.insert(-1, "--proxy-server=" + PROXY)
     shutil.rmtree(PROFILE, ignore_errors=True)
     proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 

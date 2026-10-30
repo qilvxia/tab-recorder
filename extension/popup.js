@@ -306,7 +306,7 @@ async function runRecognitionDiag() {
           'li[class*="active" i] a', 'a[class*="active" i]',
           'li[class*="current" i] a', 'a[class*="current" i]',
           'li[class~="on"] a', '[class*="playing" i]:not(video)',
-          'dd[class*="active" i]', '[class*="active" i]',
+          'dd[class*="active" i]', '[class~="active" i]', '[class*="active" i]',
           '[selected]:not(option)', '[aria-selected="true" i]:not(option)',
         ];
         const GENERIC_WORDS = new Set(["首页","课程","目录","简介","评论","下载","分享","全屏","播放","暂停","笔记","问答","资料","讨论","公告","讲义","习题","测试","考试","更多","课程大纲","大纲","返回","上一节","下一节"]);

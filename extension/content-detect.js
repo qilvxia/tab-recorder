@@ -281,7 +281,7 @@
     'li[class*="active" i] a', 'a[class*="active" i]',
     'li[class*="current" i] a', 'a[class*="current" i]',
     'li[class~="on"] a', '[class*="playing" i]:not(video)',
-    'dd[class*="active" i]', '[class*="active" i]',
+    'dd[class*="active" i]', '[class~="active" i]', '[class*="active" i]',
     '[selected]:not(option)', '[aria-selected="true" i]:not(option)',
   ];
 
