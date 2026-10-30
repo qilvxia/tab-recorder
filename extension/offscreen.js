@@ -1118,11 +1118,11 @@
     // 从开录起 2×wrapSec 兜底——原前提使纯暂停场景收工永不启用（用户实锤）；
     // 2 倍宽限防开录慢的用户被误收
     if (lastUrlChangeAt >= resumeTs || lastSplitAt >= resumeTs) { wrapStatus = { blocked: "有跳转/切节活动" }; return; }
-    // 基准 = resumeTs（v2.8.7 修双倍：v2.8.6 的 recStartTs+wrapSec 使纯暂停从
-    // 开录算 2×wrapSec——用户实测设 30s 倒计时 60s。恢复续录 resumeTs 更新，
-    // 纯暂停 resumeTs=首段起点，两种场景都从各自基准走 wrapSec——设多久就多久）
-    const base = resumeTs;
-    const left = wrapSec * 1000 - (now() - base);
+    // 基准 = resumeTs 起 2×wrapSec（v2.8.9 止血回退）：playing 盲区站「课时播放
+    // 中」与「暂停/卡死」在代理信号（URL/切节活动）上不可区分——1× 窗口会把
+    // 播放中的录制误停（用户实锤）。2× 是信号缺失下的安全代价：播放中存活
+    // 窗口翻倍，暂停收工变慢同倍。等 currentTime 播放铁证落地后盲区分支退役
+    const left = wrapSec * 2000 - (now() - resumeTs);
     if (left > 0) { wrapStatus = { left }; return; }
     wrapStatus = null;
     stopAll("idle-wrap");

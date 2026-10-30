@@ -273,9 +273,10 @@ async function startRecording() {
   pollSoon(250);
 }
 
-// 识别诊断（v2.8.7）：在当前页采集标题识别的逐选择器命中明细——
-// 数据走 executeScript（扩展消息通道），站点 console.clear 反调试管不着；
-// 结果 JSON 复制到剪贴板，用户粘贴回反馈即可定位命名问题
+// 识别诊断 v2（v2.8.9）：全帧采集播放状态——每帧 video 清单 + currentTime
+// 双采样推进检测（事件可被站点绕过，currentTime 属性推进是播放铁证）+
+// 顶层 mediaSession.playbackState + 播放器控制按钮 aria。数据走 executeScript
+//（扩展消息通道），console.clear 反调试管不着；结果复制到剪贴板
 async function runRecognitionDiag() {
   if (!tabInfo || tabInfo.id == null) return;
   if (isBrowserPage(tabInfo.url)) {
@@ -284,86 +285,62 @@ async function runRecognitionDiag() {
   }
   const btn = $("diagBtn");
   btn.disabled = true;
-  btn.textContent = "采集中…";
+  btn.textContent = "采集中…（约 3 秒）";
   try {
-    const [res] = await chrome.scripting.executeScript({
-      target: { tabId: tabInfo.id },
-      func: () => {
-        const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
-        const isJunk = (s) => !s || /^[0-9a-f]{20,}$/i.test(s) || /^\d{10,}$/.test(s);
-        const okName = (t) => { const s = clean(t); return s.length >= 2 && s.length <= 80 && !isJunk(s) ? s : ""; };
-        const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
-        const clsChain = (el) => {
-          const out = [];
-          for (let p = el, i = 0; p && p !== document.body && i < 5; i++, p = p.parentElement) {
-            const c = typeof p.className === "string" ? p.className : (p.className && p.className.baseVal) || "";
-            out.push(p.tagName.toLowerCase() + (c ? "." + c.split(/\s+/).slice(0, 3).join(".") : ""));
-          }
-          return out.join(" < ");
-        };
-        const ACTIVE_SELS = [
-          '[aria-current="true" i]', '[aria-current="page" i]',
-          'li[class*="active" i] a', 'a[class*="active" i]',
-          'li[class*="current" i] a', 'a[class*="current" i]',
-          'li[class~="on"] a', '[class*="playing" i]:not(video)',
-          'dd[class*="active" i]', '[class~="active" i]', '[class*="active" i]',
-          '[selected]:not(option)', '[aria-selected="true" i]:not(option)',
-        ];
-        const GENERIC_WORDS = new Set(["首页","课程","目录","简介","评论","下载","分享","全屏","播放","暂停","笔记","问答","资料","讨论","公告","讲义","习题","测试","考试","更多","课程大纲","大纲","返回","上一节","下一节"]);
-        const perSel = [];
-        let finalPick = "";
-        let finalVia = "";
-        for (const sel of ACTIVE_SELS) {
-          let els;
-          try { els = document.querySelectorAll(sel); } catch (e) { continue; }
-          const hits = [];
-          for (const el of els) {
-            if (!visible(el)) continue;
-            if (el.closest("nav,header,footer")) continue;
-            const blacklisted = !!el.closest('[class*="ctrl" i],[class*="control" i],[class*="menu" i],[role="menu"]');
-            let entryCount = 0;
-            for (const c of el.querySelectorAll("li,a,dd")) {
-              if (visible(c) && clean(c.textContent).length >= 2 && ++entryCount >= 2) break;
-            }
-            const container = entryCount >= 2;
-            if (blacklisted || container) {
-              hits.push({ skip: blacklisted ? "ctrl" : "container", cls: clsChain(el) });
-              continue;
-            }
-            let val = "";
-            for (const t of el.querySelectorAll("[class*='title' i],[id*='title' i]")) {
-              const s = okName(t.textContent);
-              if (s && !GENERIC_WORDS.has(s)) { val = s; break; }
-            }
-            if (!val) {
-              let t = okName(el.innerText || el.textContent);
-              if (t) { t = clean(t.replace(/\s*\d{1,2}:\d{2}(?::\d{2})?\s*$/, "")); if (t.length >= 2 && !GENERIC_WORDS.has(t)) val = t; }
-            }
-            hits.push({ val: val.slice(0, 50), cls: clsChain(el) });
-            if (val && !finalPick) { finalPick = val; finalVia = sel; }
-          }
-          if (hits.length) perSel.push({ sel, hits: hits.slice(0, 4) });
+    const frameProbe = () => {
+      const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
+      const clsChain = (el) => {
+        const out = [];
+        for (let p = el, i = 0; p && p !== document.body && i < 5; i++, p = p.parentElement) {
+          const c = typeof p.className === "string" ? p.className : (p.className && p.className.baseVal) || "";
+          out.push(p.tagName.toLowerCase() + (c ? "." + c.split(/\s+/).slice(0, 3).join(".") : ""));
         }
-        let ms = "";
-        try { ms = (navigator.mediaSession && navigator.mediaSession.metadata && navigator.mediaSession.metadata.title) || ""; } catch (e) {}
-        return JSON.stringify({
-          url: location.href.slice(0, 120),
-          mainVal: clean(ms),
-          activeItemPick: finalPick,
-          activeItemVia: finalVia,
-          docTitle: document.title.slice(0, 80),
-          perSel,
-        });
-      },
+        return out.join(" < ");
+      };
+      const videos = [...document.querySelectorAll("video")].map((v) => ({
+        paused: v.paused, ended: v.ended,
+        t: +v.currentTime.toFixed(2), dur: +((v.duration || 0).toFixed(1)),
+        size: v.videoWidth + "x" + v.videoHeight,
+        cls: clsChain(v),
+      }));
+      // 播放器控制按钮：video 祖先容器附近的 button/[role=button]，label 含 播放/暂停/play/pause
+      const btns = [];
+      const v0 = document.querySelector("video");
+      if (v0 && v0.parentElement) {
+        let scope = v0.parentElement;
+        for (let i = 0; i < 4 && scope && btns.length < 8; i++, scope = scope.parentElement) {
+          for (const b of scope.querySelectorAll('button,[role="button"],.bpui-button,[class*="ctrl" i]')) {
+            const label = clean(b.getAttribute("aria-label") || b.title || b.getAttribute("data-title") || "");
+            if (/播放|暂停|play|pause/i.test(label) && btns.length < 8) {
+              btns.push({ label: label.slice(0, 30), cls: (typeof b.className === "string" ? b.className : "").slice(0, 50) });
+            }
+          }
+        }
+      }
+      return { url: location.href.slice(0, 100), videos, btns, playbackState: (navigator.mediaSession && navigator.mediaSession.playbackState) || "" };
+    };
+    const [res] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id }, func: frameProbe, allFrames: true });
+    const frames = (res || []).filter((f) => f.result).map((f) => f.result);
+    // currentTime 双采样：间隔 2s 再采一轮，标注每帧每 video 是否推进（播放铁证）
+    await new Promise((r) => setTimeout(r, 2000));
+    const [res2] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id }, func: frameProbe, allFrames: true });
+    const frames2 = (res2 || []).filter((f) => f.result).map((f) => f.result);
+    const report = frames.map((fr, i) => {
+      const fr2 = frames2[i] || {};
+      const videos = (fr.videos || []).map((v, j) => {
+        const v2 = (fr2.videos || [])[j] || {};
+        return { ...v, advanced: typeof v2.t === "number" && v2.t > v.t ? `推进 ${v.t}→${v2.t}` : `未推进 ${v.t}→${v2.t ?? "?"}` };
+      });
+      return { frame: fr.url, videos, playerButtons: (fr.btns || []).slice(0, 4), playbackState: fr.playbackState };
     });
-    const json = (res && res.result) || "";
-    await navigator.clipboard.writeText(String(json)).catch(() => {});
-    showErr("已复制到剪贴板（" + String(json).length + " 字符），粘贴给开发者即可。" + String(json).slice(0, 200));
+    const json = JSON.stringify(report);
+    await navigator.clipboard.writeText(json).catch(() => {});
+    showErr("已复制到剪贴板（" + json.length + " 字符），粘贴给开发者即可。" + json.slice(0, 260));
   } catch (e) {
     showErr("采集失败：" + String(e && e.message || e).slice(0, 120));
   }
   btn.disabled = false;
-  btn.textContent = "识别诊断（采集本页标题识别命中，复制到剪贴板）";
+  btn.textContent = "识别诊断（采集本页播放/标题识别状态，复制到剪贴板）";
 }
 
 function showErr(text) {
@@ -458,6 +435,14 @@ function render(st) {
   $("totalTime").textContent = fmtDur(st.totalMs || 0);
   $("totalSize").textContent = fmtMB(st.bytes || 0);
 
+  // 收工状态独立一行（面板美化：不混入 tips 长串）
+  let wrapText = "";
+  if (st.dbg && st.dbg.wrapStatus) {
+    if (st.dbg.wrapStatus.left != null) wrapText = `无播放收工倒计时：${Math.ceil(st.dbg.wrapStatus.left / 1000)}s`;
+    else if (st.dbg.wrapStatus.blocked) wrapText = `收工延迟：${st.dbg.wrapStatus.blocked}`;
+  }
+  $("wrapTip").textContent = wrapText;
+
   const tips = [];
   if (st.state === "stopping") tips.push("正在保存文件，请勿关闭浏览器…");
   if (st.crop) tips.push(`仅录制所选区域（${st.crop.w}×${st.crop.h}）。`);
@@ -482,14 +467,7 @@ function render(st) {
   if (st.signals) {
     tips.push(`播放信号：${st.signals.hasPlayed ? "✓ 已到达" : "✗ 未收到（停播判定不启用，播完靠弹窗入口信号）"}`);
   }
-  if (st.dbg) {
-    if (st.dbg.wrapStatus && st.dbg.wrapStatus.left != null) {
-      tips.push(`无播放收工倒计时：${Math.ceil(st.dbg.wrapStatus.left / 1000)}s`);
-    } else if (st.dbg.wrapStatus && st.dbg.wrapStatus.blocked) {
-      tips.push(`收工延迟：${st.dbg.wrapStatus.blocked}`);
-    }
-    if (st.dbg.pendingLesson) tips.push(`待确认课时名：${st.dbg.pendingLesson}`);
-  }
+  if (st.dbg && st.dbg.pendingLesson) tips.push(`待确认课时名：${st.dbg.pendingLesson}`);
   if (st.lastSplit) {
     const d = new Date(st.lastSplit.at);
     const p2 = (v) => String(v).padStart(2, "0");

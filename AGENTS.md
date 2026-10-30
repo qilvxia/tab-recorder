@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-29 · v2.8.8）
+## 当前状态（2026-10-29 · v2.8.9）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -132,6 +132,9 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ⏳ ~~待用户 Chrome 复验 v2.8.7~~ → **用户提供「识别诊断」采集 JSON 实锤**：唯一命中选择器=第 10 项子串版 `[class*="active" i]`，命中元素 `div.section.unactive`（路飞章节条目 class 是 **active/unactive 二态**——"unactive" 含 "active" 子串，全部章节条目都命中，DOM 序第一个=第 1 课）；当前节 class=section.active 排在其后永远轮不到；3 个控件误命中（collect-inactive/switch-active/active-tab）全被黑名单拦下；mainVal 空证实 mediasession 已死
 - ✅ v2.8.8（**路飞命名精确修复——词匹配 `[class~="active" i]`**）：unactive 是一个完整词 ≠ active 词（完整词匹配排除全部非当前节），active 词唯一命中当前节 div.section.active；子串版保留在后作兜底（防 "is-active" 连字符复合词站点）。**同步三处镜像**：popup 诊断脚本内嵌 ACTIVE_SELS、diag_bili.py PROBE_JS + 代理改条件式（diag_pause 同款问题：代理挂掉时 B 站也 error page）。**验证（5/5 全自动化 PASS）**：blind2 三段全名（b2List "pod-item active" 走词匹配、竞争链无恙）/blind 收工/正常 e2e 三节三文件/B 站暂停 96.2s 单倍收工零碎片/smoke
 - ⏳ **待用户 Chrome 复验 v2.8.8**：路飞分节连录第 2 课起文件名随切课变化（当前节 div.section.active 词匹配唯一命中 → alt 接管命名）；连播不回归（弹窗仍自动关）；若仍不对点「识别诊断」再采一份（应能看到 active 项命中详情）
+- ⏳ ~~待用户 Chrome 复验 v2.8.8~~ → **用户复验：①路飞命名识别成功 ✓ ②新 bug：路飞播放中面板显示收工倒计时、时间到误停录制保存（B 站/YouTube 无此 bug）③要求收工状态另起一行显示**；用户否决音频电平方案（视频大段无声且长短不可预知）
+- ✅ v2.8.9（**误收工止血 + 取证按钮 v2 + 面板美化**）：**根因再定位**——盲区站"课时播放中"与"暂停/卡死"在代理信号（URL/切节活动）上数学不可区分，任何固定窗口必误杀其一（v2.8.7 窗口减半后暴露）；音频电平被用户否决。**新线索**：历史"playing/ended 不可见"结论全基于**事件**（可被自定义播放器绕过），video.currentTime 属性推进是 DOM 状态无法拦截——若跨域 iframe 帧注入成功，currentTime 双采样差>0 = 播放铁证，playing 信号可脱离事件复活。**交付**：①「识别诊断」v2（executeScript allFrames:true 全帧 video 清单 + currentTime 2s 双采样推进标注 + 顶层 mediaSession.playbackState + 播放器控制按钮 aria-label——三条候选信号一次采齐进剪贴板）；②**止血**：盲区分支窗口回退 2×wrapSec（wrapStatus 如实显示 2×——播放中误杀窗口减半，暂停收工变慢同倍，信号缺失下的安全代价，currentTime 落地后盲区分支整体退役）；③**面板美化**：recBox 新增独立 `#wrapTip` 行，「无播放收工倒计时/收工延迟」不再混入 tips 长串
+- ⏳ **待用户提供路飞播放中的「识别诊断」采集结果**：按 currentTime 推进帧的实锤修 playing 信号（currentTime 推进检测或跨域帧注入修复）→ 盲区分支退役，全链路正常信号驱动
 - ⏳ **上架流程（材料阶段）**：包已就绪（v2.8.6 重新打包）；剩余开发者后台材料——商店描述文案、隐私声明（零数据收集 + 权限用途逐条：tabCapture/offscreen/downloads/storage/scripting/activeTab）、截图
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成，**用户验收通过**）→ ⏳ 上架流程（v2.8.3 包已生成，材料阶段）
 
