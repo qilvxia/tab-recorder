@@ -319,11 +319,11 @@ async function runRecognitionDiag() {
       }
       return { url: location.href.slice(0, 100), videos, btns, playbackState: (navigator.mediaSession && navigator.mediaSession.playbackState) || "" };
     };
-    const [res] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id }, func: frameProbe, allFrames: true });
+    const [res] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id, allFrames: true }, func: frameProbe });
     const frames = (res || []).filter((f) => f.result).map((f) => f.result);
     // currentTime 双采样：间隔 2s 再采一轮，标注每帧每 video 是否推进（播放铁证）
     await new Promise((r) => setTimeout(r, 2000));
-    const [res2] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id }, func: frameProbe, allFrames: true });
+    const [res2] = await chrome.scripting.executeScript({ target: { tabId: tabInfo.id, allFrames: true }, func: frameProbe });
     const frames2 = (res2 || []).filter((f) => f.result).map((f) => f.result);
     const report = frames.map((fr, i) => {
       const fr2 = frames2[i] || {};
