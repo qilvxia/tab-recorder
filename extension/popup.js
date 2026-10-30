@@ -297,12 +297,26 @@ async function runRecognitionDiag() {
         }
         return out.join(" < ");
       };
-      const videos = [...document.querySelectorAll("video")].map((v) => ({
-        paused: v.paused, ended: v.ended,
-        t: +v.currentTime.toFixed(2), dur: +((v.duration || 0).toFixed(1)),
-        size: v.videoWidth + "x" + v.videoHeight,
-        cls: clsChain(v),
-      }));
+      const videos = [...document.querySelectorAll("video")].map((v) => {
+        const r = v.getBoundingClientRect();
+        return {
+          paused: v.paused, ended: v.ended,
+          t: +v.currentTime.toFixed(2), dur: +((v.duration || 0).toFixed(1)),
+          size: v.videoWidth + "x" + v.videoHeight,
+          rect: Math.round(r.width) + "x" + Math.round(r.height),
+          cls: clsChain(v),
+        };
+      });
+      // detector 视角（v2.8.13）：注入实例的内部状态——playing 判定死因定位
+      let detector = "not-injected";
+      try {
+        const d = window.__tabRecDetector;
+        if (d && window.__tabRecDiag) {
+          detector = { lastPlaying: !!window.__tabRecDiag.playing, anyPlaying: window.__tabRecDiag.anyPlaying, lesson: String(window.__tabRecDiag.lesson || "").slice(0, 30) };
+        } else if (d) {
+          detector = "present-no-diag";
+        }
+      } catch (e) { detector = "err"; }
       // 播放器控制按钮：video 祖先容器附近的 button/[role=button]，label 含 播放/暂停/play/pause
       const btns = [];
       const v0 = document.querySelector("video");
@@ -317,7 +331,7 @@ async function runRecognitionDiag() {
           }
         }
       }
-      return { url: location.href.slice(0, 100), videos, btns, playbackState: (navigator.mediaSession && navigator.mediaSession.playbackState) || "" };
+      return { url: location.href.slice(0, 100), videos, btns, playbackState: (navigator.mediaSession && navigator.mediaSession.playbackState) || "", detector };
     };
     // executeScript Promise 形式返回 InjectionResult[]（v2.8.11 修：曾误用
     // const [res] 解构成单个对象，后续 .filter 抛 TypeError）

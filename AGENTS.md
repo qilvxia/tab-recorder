@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-29 · v2.8.12）
+## 当前状态（2026-10-29 · v2.8.13）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -141,6 +141,8 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.8.11（**诊断按钮解构 bug 修复 + node 单测护航**）：executeScript Promise 形式返回 InjectionResult[]，popup.js 误用 `const [res]` 解构成单个对象 → 后续 .filter 抛 TypeError；且首轮修复代码还叠了第二层（frames 已 map 成 result 又取 inj.result=undefined）——**node 迷你单测先于用户抓到**（模拟 InjectionResult[] 跑 report 构建逻辑）。修：保留 InjectionResult 数组 + 按 frameId 对齐双采样（帧顺序理论可变，不依赖索引）。验证：单测 PASS（帧数/推进标注/frameId 对齐/按钮）+ smoke PASS
 - ⏳ ~~v2.8.11 复验~~ → **用户实测诊断按钮工作 ✓，采集 JSON 实锤路飞播放器形态**：顶层 pv-video 是**空壳**（paused=true/currentTime=0/duration=0/尺寸 0x0）——加密画面不经它渲染，「播放中 vs 暂停」在无 host 权限红线内无信号可测；仅 2 帧（顶层+about:blank），polyv 渲染层（iframe 静默注入失败或 canvas）不可达；mediaSession=none
 - ✅ v2.8.12（**盲区收工语义定稿：保播放中零误杀，纯暂停手停**）：AskUserQuestion 未答，按推荐执行——数据损失 > 便利性损失。idleWrapCheck 盲区分支恢复 everBetween 前提：经历过节间的静止段（课程放完/弹窗卡死，连播链路必然经过）照常收工 ✓；纯暂停（从未进 between，人在场）不自动收工，面板显示「信号盲区：播放/暂停不可检测，请手动停止」。2× 止血窗口删除（everBetween 前提下 1× 安全：节间静止段必是卡死）。已知代价：路飞暂停后需手动停止（面板有提示）
+- ⏳ ~~v2.8.12 复验~~ → **用户报 B 站/YouTube 暂停不收工**（路飞暂停场景接受手停方案 ✓）；建议黑白名单制。**grilling 两答实锤**：面板显示「信号盲区」文案 = B 站/YouTube 本场 **hasPlayedEver=false**（playing 从未上报）→ 落盲区分支。**时间线考古拼合全时间线**：v2.8.6 引入 anyPlaying 主视频化 → 用户当轮报"三站收工没实现"（判定失败第一次暴露）；v2.8.7 盲区放宽 1× 窗口对 hasPlayedEver=false 的站也收工 → 掩盖判定失败，用户复验"实现"；v2.8.12 恢复 everBetween 前提（修路飞误杀）→ 掩盖失效 → B 站/YouTube 打回不收工。**真根因 = 主视频化判定在用户 Chrome 对 B 站/YouTube 恒 false**（v2.8.6 引入；v2.8.12 diff 对可见站零改动，非其回归）。**黑白名单回应（无需改码）**：hasPlayedEver 自动分档 = 用户建议的名单制——信号可见站自动白名单（暂停收工）、盲区站自动黑名单（路飞暂停不收工），v2.8.12 已落地且优于手动名单（新站点零配置）
+- ✅ v2.8.13（**playing 信号死因兜底 + detector 视角取证**）：① **anyPlaying 兜底**——主视频化依赖 rect 数据，找不到任何 rect>0 的 video（判定无法建立）时退回 v2.8.6 前「任一在播」语义（该时代 B 站/YouTube 收工工作过）；rect 可信时保持主视频化（挡浮层）；② **诊断按钮 v3**：采集 detector 视角（window.__tabRecDetector 存在性 + content-detect 新增 window.__tabRecDiag{playing,lesson} 每轮更新）+ video rect 尺寸——用户 B 站播放中点一次即可回答「主视频化为何失败」（rect 全零→兜底已覆盖；rect 正常但 paused 恒 true→壳化另议）
 - ⏳ **上架流程（材料阶段）**：包已就绪（v2.8.6 重新打包）；剩余开发者后台材料——商店描述文案、隐私声明（零数据收集 + 权限用途逐条：tabCapture/offscreen/downloads/storage/scripting/activeTab）、截图
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成，**用户验收通过**）→ ⏳ 上架流程（v2.8.3 包已生成，材料阶段）
 

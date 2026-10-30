@@ -410,7 +410,10 @@
   function anyPlaying() {
     // 主视频判定（v2.8.6）：取可视面积最大的 video——暂停页的推荐浮层预览
     // 小窗自动播不算"页面在播"（否则 playing 心跳持续，停播切节与无播放收工
-    // 被浮层永久阻塞，用户实锤三站收工失效的主因之一）；主视频 paused 即停播
+    // 被浮层永久阻塞）；主视频 paused 即停播。
+    // 兜底（v2.8.13）：主视频化依赖 rect 数据，用户 Chrome 实测 B 站/YouTube
+    // 上判定恒 false（playing 死→收工失效，v2.8.7 曾被盲区放宽掩盖）——找不到
+    // 任何 rect>0 的 video（判定无法建立）时退回 v2.8.6 前的「任一在播」语义
     const vids = document.querySelectorAll("video");
     let main = null, best = 0;
     for (const v of vids) {
@@ -420,7 +423,10 @@
         main = v;
       }
     }
-    return !!main && !main.paused && !main.ended;
+    if (!main) {
+      return vids.length ? [...vids].some((v) => !v.paused && !v.ended) : false;
+    }
+    return !main.paused && !main.ended;
   }
 
   // 连播入口可见性（播完弹窗类信号，offscreen 用于"播完即停录"）：class 启发式
@@ -521,6 +527,9 @@
       // 开播时刻，每约 30s 必误切一段（v2.3.1 N 段根因）。在播期间每轮上报。
       report();
     }
+    // 诊断视角暴露（v2.8.13）：popup「识别诊断」经 executeScript 读本对象，
+    // 定位 playing 判定死因（detector 在否/判定值/当前 lesson）
+    window.__tabRecDiag = { playing, lesson: name, anyPlaying: playing, at: Date.now() };
     if (last.ended && Date.now() - last.endedAt > 10000) last.ended = false; // 未收到 playing 的兜底解除
   }, 700);
 
