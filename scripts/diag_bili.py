@@ -24,13 +24,14 @@ PROXY = "127.0.0.1:7897"  # 本机代理（访问 YouTube 等外网站点必需�
 PROBE_JS = r"""(() => {
   const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
   const isJunk = (s) => !s || /^[0-9a-f]{20,}$/i.test(s) || /^\d{10,}$/.test(s);
-  const okName = (t) => { const s = clean(t); return s.length >= 2 && s.length <= 80 && !isJunk(s) ? s : ""; };
+  const NOISE_PATTERNS = [/-{2,}|—{2,}|~{2,}/, /\d+\s*个(课时|课程|视频|节)/, /已学习|总时长|课程大纲|正在加载|请稍后|加载中/];
+  const okName = (t) => { const s = clean(t); return s.length >= 2 && s.length <= 80 && !isJunk(s) && !NOISE_PATTERNS.some((r) => r.test(s)) ? s : ""; };
   const GENERIC = new Set(["首页","课程","目录","简介","评论","下载","分享","全屏","播放","暂停","笔记","问答","资料","讨论","公告","讲义","习题","测试","考试","更多","课程大纲","大纲","返回","上一节","下一节"]);
   const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
 
   // 逐选择器采样（镜像 v2.5.4 ACTIVE_SELS 优先级逐个查询）：每级列出前 5 个命中的
   // class/文本/校验四元组——直接看到「哪一级返回了什么」，断点即现
-  const ACTIVE_SELS = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class*="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[class*="active" i]','[selected]:not(option)','[aria-selected="true" i]:not(option)'];
+  const ACTIVE_SELS = ['[aria-current="true" i]','[aria-current="page" i]','li[class*="active" i] a','a[class*="active" i]','li[class*="current" i] a','a[class*="current" i]','li[class~="on"] a','[class*="playing" i]:not(video)','dd[class*="active" i]','[class*="active" i]','[selected]:not(option)','[aria-selected="true" i]:not(option)'];
   const perSel = [];
   for (const sel of ACTIVE_SELS) {
     let hits = [];

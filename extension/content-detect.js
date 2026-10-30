@@ -296,6 +296,15 @@
         //（B 站实测 bpx-player-ctrl-quality-menu-item bpx-state-active 文本
         // "自动(360P 流畅)"，可见时抢在分集列表前返回错值）——控件容器不是课时
         if (el.closest('[class*="ctrl" i],[class*="control" i],[class*="menu" i],[role="menu"]')) continue;
+        // 容器型命中跳过（v2.8.7）：命中元素若含 ≥2 个可见且文本非空的 li/a/dd
+        // 子条目，它是列表容器而非"当前条目"——容器只会给出第一个子项的文本
+        // = 恒第一课（路飞命名恒第一课的机制嫌疑：目录容器 class 含
+        // active/current 子串被子串选择器命中）
+        let entryCount = 0;
+        for (const c of el.querySelectorAll("li,a,dd")) {
+          if (visible(c) && clean(c.textContent).length >= 2 && ++entryCount >= 2) break;
+        }
+        if (entryCount >= 2) continue;
         // 命中项优先取内部标题子元素——分集/目录列表项常为「序号+标题+时长」混排
         //（B 站列表项整项 innerText="01. xxx 05:20"，.title-txt 才是纯集名；
         // YouTube 列表项是 span#video-title——class 或 id 含 title 都认）

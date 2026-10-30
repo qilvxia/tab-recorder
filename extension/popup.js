@@ -138,6 +138,7 @@ async function init() {
   $("fileNameInput").onchange = () => saveSetting("lastFileName", $("fileNameInput").value.trim());
 
   $("startBtn").onclick = startRecording;
+  $("diagBtn").onclick = runRecognitionDiag;
   $("cropPickBtn").onclick = pickCropRegion;
   $("cropClearBtn").onclick = async () => {
     await chrome.storage.session.remove("cropRegion").catch(() => {});
@@ -270,6 +271,99 @@ async function startRecording() {
     return;
   }
   pollSoon(250);
+}
+
+// 识别诊断（v2.8.7）：在当前页采集标题识别的逐选择器命中明细——
+// 数据走 executeScript（扩展消息通道），站点 console.clear 反调试管不着；
+// 结果 JSON 复制到剪贴板，用户粘贴回反馈即可定位命名问题
+async function runRecognitionDiag() {
+  if (!tabInfo || tabInfo.id == null) return;
+  if (isBrowserPage(tabInfo.url)) {
+    showErr("浏览器内置页面（chrome:// 等）无法采集。");
+    return;
+  }
+  const btn = $("diagBtn");
+  btn.disabled = true;
+  btn.textContent = "采集中…";
+  try {
+    const [res] = await chrome.scripting.executeScript({
+      target: { tabId: tabInfo.id },
+      func: () => {
+        const clean = (t) => String(t || "").replace(/\s+/g, " ").trim();
+        const isJunk = (s) => !s || /^[0-9a-f]{20,}$/i.test(s) || /^\d{10,}$/.test(s);
+        const okName = (t) => { const s = clean(t); return s.length >= 2 && s.length <= 80 && !isJunk(s) ? s : ""; };
+        const visible = (el) => !!(el.offsetWidth || el.offsetHeight || el.getClientRects().length);
+        const clsChain = (el) => {
+          const out = [];
+          for (let p = el, i = 0; p && p !== document.body && i < 5; i++, p = p.parentElement) {
+            const c = typeof p.className === "string" ? p.className : (p.className && p.className.baseVal) || "";
+            out.push(p.tagName.toLowerCase() + (c ? "." + c.split(/\s+/).slice(0, 3).join(".") : ""));
+          }
+          return out.join(" < ");
+        };
+        const ACTIVE_SELS = [
+          '[aria-current="true" i]', '[aria-current="page" i]',
+          'li[class*="active" i] a', 'a[class*="active" i]',
+          'li[class*="current" i] a', 'a[class*="current" i]',
+          'li[class~="on"] a', '[class*="playing" i]:not(video)',
+          'dd[class*="active" i]', '[class*="active" i]',
+          '[selected]:not(option)', '[aria-selected="true" i]:not(option)',
+        ];
+        const GENERIC_WORDS = new Set(["首页","课程","目录","简介","评论","下载","分享","全屏","播放","暂停","笔记","问答","资料","讨论","公告","讲义","习题","测试","考试","更多","课程大纲","大纲","返回","上一节","下一节"]);
+        const perSel = [];
+        let finalPick = "";
+        let finalVia = "";
+        for (const sel of ACTIVE_SELS) {
+          let els;
+          try { els = document.querySelectorAll(sel); } catch (e) { continue; }
+          const hits = [];
+          for (const el of els) {
+            if (!visible(el)) continue;
+            if (el.closest("nav,header,footer")) continue;
+            const blacklisted = !!el.closest('[class*="ctrl" i],[class*="control" i],[class*="menu" i],[role="menu"]');
+            let entryCount = 0;
+            for (const c of el.querySelectorAll("li,a,dd")) {
+              if (visible(c) && clean(c.textContent).length >= 2 && ++entryCount >= 2) break;
+            }
+            const container = entryCount >= 2;
+            if (blacklisted || container) {
+              hits.push({ skip: blacklisted ? "ctrl" : "container", cls: clsChain(el) });
+              continue;
+            }
+            let val = "";
+            for (const t of el.querySelectorAll("[class*='title' i],[id*='title' i]")) {
+              const s = okName(t.textContent);
+              if (s && !GENERIC_WORDS.has(s)) { val = s; break; }
+            }
+            if (!val) {
+              let t = okName(el.innerText || el.textContent);
+              if (t) { t = clean(t.replace(/\s*\d{1,2}:\d{2}(?::\d{2})?\s*$/, "")); if (t.length >= 2 && !GENERIC_WORDS.has(t)) val = t; }
+            }
+            hits.push({ val: val.slice(0, 50), cls: clsChain(el) });
+            if (val && !finalPick) { finalPick = val; finalVia = sel; }
+          }
+          if (hits.length) perSel.push({ sel, hits: hits.slice(0, 4) });
+        }
+        let ms = "";
+        try { ms = (navigator.mediaSession && navigator.mediaSession.metadata && navigator.mediaSession.metadata.title) || ""; } catch (e) {}
+        return JSON.stringify({
+          url: location.href.slice(0, 120),
+          mainVal: clean(ms),
+          activeItemPick: finalPick,
+          activeItemVia: finalVia,
+          docTitle: document.title.slice(0, 80),
+          perSel,
+        });
+      },
+    });
+    const json = (res && res.result) || "";
+    await navigator.clipboard.writeText(String(json)).catch(() => {});
+    showErr("已复制到剪贴板（" + String(json).length + " 字符），粘贴给开发者即可。" + String(json).slice(0, 200));
+  } catch (e) {
+    showErr("采集失败：" + String(e && e.message || e).slice(0, 120));
+  }
+  btn.disabled = false;
+  btn.textContent = "识别诊断（采集本页标题识别命中，复制到剪贴板）";
 }
 
 function showErr(text) {

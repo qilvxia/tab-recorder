@@ -93,7 +93,6 @@
   //   resumeTs 在 startSegment 开录也会赋值，仅凭它非 null 会在「正常播放中」
   //   （playing 不可见、课时内无 URL 变化、无切节）误收工；卡弹窗场景必然
   //   经历过 between（弹窗→entry-visible/between→恢复→弹窗还在），此前提精确圈定
-  let recStartTs = 0; // 本场开录时刻（v2.8.6：盲区站纯暂停的收工 2×wrapSec 兜底基准）
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -497,7 +496,6 @@
     endedSeen = false;
     endedReportedEver = false; // 站点能力探测按场重置（新一场重新探测 ended 可达性）
     everBetween = false; // 盲区站收工前提按场重置
-    recStartTs = now(); // 盲区站纯暂停收工的 2×wrapSec 兜底基准
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
                          // 导致全局闸从开录起失效——开录静默误切节、占闸挤掉真播完信号）
     resetContestState(); // 竞争/挂起类集中重置（含 prevHighRank/entryDismissedAt 等）
@@ -1120,7 +1118,10 @@
     // 从开录起 2×wrapSec 兜底——原前提使纯暂停场景收工永不启用（用户实锤）；
     // 2 倍宽限防开录慢的用户被误收
     if (lastUrlChangeAt >= resumeTs || lastSplitAt >= resumeTs) { wrapStatus = { blocked: "有跳转/切节活动" }; return; }
-    const base = everBetween ? resumeTs : Math.max(resumeTs, recStartTs + wrapSec * 1000);
+    // 基准 = resumeTs（v2.8.7 修双倍：v2.8.6 的 recStartTs+wrapSec 使纯暂停从
+    // 开录算 2×wrapSec——用户实测设 30s 倒计时 60s。恢复续录 resumeTs 更新，
+    // 纯暂停 resumeTs=首段起点，两种场景都从各自基准走 wrapSec——设多久就多久）
+    const base = resumeTs;
     const left = wrapSec * 1000 - (now() - base);
     if (left > 0) { wrapStatus = { left }; return; }
     wrapStatus = null;

@@ -69,6 +69,11 @@ button.primary {
   color: var(--brand-ink); background: var(--brand); border: none; border-radius: 10px;
 }
 button.primary:hover { filter: brightness(1.06); }
+.smallBtn {
+  width: 100%; margin-top: 6px; padding: 6px 0; font-size: 12px; cursor: pointer;
+  color: var(--sub); background: var(--card); border: 1px solid var(--line); border-radius: 8px;
+}
+.smallBtn:hover { border-color: var(--brand); color: var(--brand); }
 button.danger {
   padding: 9px 0; font: inherit; font-weight: 600; cursor: pointer; flex: 1.4;
   color: #fff; background: var(--rec); border: none; border-radius: 10px;

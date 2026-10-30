@@ -137,16 +137,19 @@ def main():
 
     shutil.rmtree(PROFILE, ignore_errors=True)
     os.makedirs(PROFILE, exist_ok=True)
-    proc = subprocess.Popen([
+    # 代理仅外网站点需要（B 站直连；代理挂掉时会把 B 站也拖成 error page）
+    args = [
         BROWSER, "--remote-debugging-port=%d" % PORT,
         "--user-data-dir=" + PROFILE,
         "--window-size=1400,900", "--window-position=20,20",
         "--no-first-run", "--no-default-browser-check",
         "--autoplay-policy=no-user-gesture-required",
-        "--proxy-server=" + PROXY,
         "--load-extension=" + EXT,
         "about:blank",
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    ]
+    if "bilibili.com" not in host:
+        args.insert(-1, "--proxy-server=" + PROXY)
+    proc = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
     try:
         for _ in range(30):
