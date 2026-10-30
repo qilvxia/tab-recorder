@@ -41,7 +41,7 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 14. 本机网络：pypi/github 直连被重置，pip 用清华镜像，代理 127.0.0.1:7897
 15. 用户信息：pip 可用（Python 3.11）、node 24 可用；ffmpeg 在 C:\Users\Admin\ffmpeg.exe；用户真实浏览器为 Chrome（14x），自动化测试用 Edge
 
-## 当前状态（2026-10-29 · v2.8.11）
+## 当前状态（2026-10-29 · v2.8.12）
 
 - ✅ M0/M1/M2/M3：v1 归档 + 单段核心（**Chrome 156 验收通过**）+ 捕获后移（弹窗倒计时稳定，验收过）+ 自动分节平铺命名（**验收通过**）+ **区域裁剪迁移（v1 方案照搬，diag_crop 实测 PASS）**
 - ✅ v2.2.0：自动连播（文本按钮+列表下一项，仅分节模式）——初版引入切节风暴暴露（非其过错，见 v2.2.1）
@@ -139,6 +139,8 @@ Chrome 商店级「标签页录制器」浏览器扩展（MV3）：录制**当�
 - ✅ v2.8.10（**诊断按钮参数修复**）：`allFrames: true` 被误放在 executeScript 选项顶层（popup.js:322/326）——MV3 参数校验要求它是 `target` 的属性。修：`target: {tabId, allFrames: true}`。**验证**：新增 scripts/check_allframes.py（SW 级形态测试——无手势时 host 权限拒绝=预期，错误类型证明参数校验通过；用户场景 popup 点击已授予 activeTab）；smoke PASS
 - ⏳ ~~v2.8.10 复验~~ → **用户实测第二层报错**：「采集失败：(res || []).filter is not a function」——参数修复后暴露解构 bug
 - ✅ v2.8.11（**诊断按钮解构 bug 修复 + node 单测护航**）：executeScript Promise 形式返回 InjectionResult[]，popup.js 误用 `const [res]` 解构成单个对象 → 后续 .filter 抛 TypeError；且首轮修复代码还叠了第二层（frames 已 map 成 result 又取 inj.result=undefined）——**node 迷你单测先于用户抓到**（模拟 InjectionResult[] 跑 report 构建逻辑）。修：保留 InjectionResult 数组 + 按 frameId 对齐双采样（帧顺序理论可变，不依赖索引）。验证：单测 PASS（帧数/推进标注/frameId 对齐/按钮）+ smoke PASS
+- ⏳ ~~v2.8.11 复验~~ → **用户实测诊断按钮工作 ✓，采集 JSON 实锤路飞播放器形态**：顶层 pv-video 是**空壳**（paused=true/currentTime=0/duration=0/尺寸 0x0）——加密画面不经它渲染，「播放中 vs 暂停」在无 host 权限红线内无信号可测；仅 2 帧（顶层+about:blank），polyv 渲染层（iframe 静默注入失败或 canvas）不可达；mediaSession=none
+- ✅ v2.8.12（**盲区收工语义定稿：保播放中零误杀，纯暂停手停**）：AskUserQuestion 未答，按推荐执行——数据损失 > 便利性损失。idleWrapCheck 盲区分支恢复 everBetween 前提：经历过节间的静止段（课程放完/弹窗卡死，连播链路必然经过）照常收工 ✓；纯暂停（从未进 between，人在场）不自动收工，面板显示「信号盲区：播放/暂停不可检测，请手动停止」。2× 止血窗口删除（everBetween 前提下 1× 安全：节间静止段必是卡死）。已知代价：路飞暂停后需手动停止（面板有提示）
 - ⏳ **上架流程（材料阶段）**：包已就绪（v2.8.6 重新打包）；剩余开发者后台材料——商店描述文案、隐私声明（零数据收集 + 权限用途逐条：tabCapture/offscreen/downloads/storage/scripting/activeTab）、截图
 - ✅ M3 区域裁剪（v2.4.0 迁移完成，**用户验收通过**）→ ✅ M4 手填文件名 + 自动停止三件（v2.6.0 完成，**用户验收通过**）→ ⏳ 上架流程（v2.8.3 包已生成，材料阶段）
 

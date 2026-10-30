@@ -1111,18 +1111,17 @@
       stopAll("idle-wrap");
       return;
     }
-    // playing 盲区站（路飞 hasPlayedEver 恒 false）：playing 不可见，「无播放」
-    // 用活动代理信号——恢复续录后 wrapSec 内 URL 无变化且无切节（真连播跳转
-    // 必然带来二者之一）= 连播已挂（弹窗点不掉/课程放完）→ 收工。
-    // everBetween 前提放宽（v2.8.6）：纯暂停（无弹窗无切节、从未进过 between）
-    // 从开录起 2×wrapSec 兜底——原前提使纯暂停场景收工永不启用（用户实锤）；
-    // 2 倍宽限防开录慢的用户被误收
+    // playing 盲区站（路飞 hasPlayedEver 恒 false）：路飞实锤（v2.8.11 诊断采集）——
+    // 播放器 video 是空壳（paused=true/currentTime=0/尺寸 0x0），加密画面不经它
+    // 渲染，「播放中 vs 暂停」在当前权限集（无 host 权限红线）内无信号可测，
+    // 任何固定窗口必误杀其一（v2.8.7 窗口减半、v2.8.9 回退 2× 都只是调节误杀
+    // 面大小）。取舍（数据损失 > 便利性损失，v2.8.12）：恢复 everBetween 前提——
+    // 经历过节间的静止段（课程放完/弹窗卡死，连播链路必然经过）照常收工；
+    // 纯暂停（从未进 between，人在场）不自动收工，面板提示手动停止。
+    // 代价：路飞暂停后需手动停止（面板有提示）；收益：播放中的录制绝不被截断
+    if (!everBetween) { wrapStatus = { blocked: "信号盲区：播放/暂停不可检测，请手动停止" }; return; }
     if (lastUrlChangeAt >= resumeTs || lastSplitAt >= resumeTs) { wrapStatus = { blocked: "有跳转/切节活动" }; return; }
-    // 基准 = resumeTs 起 2×wrapSec（v2.8.9 止血回退）：playing 盲区站「课时播放
-    // 中」与「暂停/卡死」在代理信号（URL/切节活动）上不可区分——1× 窗口会把
-    // 播放中的录制误停（用户实锤）。2× 是信号缺失下的安全代价：播放中存活
-    // 窗口翻倍，暂停收工变慢同倍。等 currentTime 播放铁证落地后盲区分支退役
-    const left = wrapSec * 2000 - (now() - resumeTs);
+    const left = wrapSec * 1000 - (now() - resumeTs);
     if (left > 0) { wrapStatus = { left }; return; }
     wrapStatus = null;
     stopAll("idle-wrap");
