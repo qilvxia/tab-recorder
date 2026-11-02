@@ -89,10 +89,6 @@
   //   ended 信号盲区站（保利威类，playing/ended 对 content script 均不可见）永远
   //   到不了 endedSeen——若无豁免，弹窗入口切节通道（其播完主通道）被整场锁死
   //   （路飞连播回归根因）。会报 ended 的站点防护照旧，从不报的站点跳过前提。
-  let everBetween = false; // 本场是否进入过节间（v2.8.4）：盲区站的收工判定前提——
-  //   resumeTs 在 startSegment 开录也会赋值，仅凭它非 null 会在「正常播放中」
-  //   （playing 不可见、课时内无 URL 变化、无切节）误收工；卡弹窗场景必然
-  //   经历过 between（弹窗→entry-visible/between→恢复→弹窗还在），此前提精确圈定
 
   // 识别标题（content-detect 级联上报）
   let currentLesson = "";
@@ -495,7 +491,6 @@
     endedStopFired = false;
     endedSeen = false;
     endedReportedEver = false; // 站点能力探测按场重置（新一场重新探测 ended 可达性）
-    everBetween = false; // 盲区站收工前提按场重置
     lastSplitAt = now(); // 启动静默期：开录 10 秒内不切节（v1 验证过的设计，v2 重写时丢失
                          // 导致全局闸从开录起失效——开录静默误切节、占闸挤掉真播完信号）
     resetContestState(); // 竞争/挂起类集中重置（含 prevHighRank/entryDismissedAt 等）
@@ -630,7 +625,6 @@
       pauseAfterStop = false;
       state = "between";
       betweenStartAt = now();
-      everBetween = true; // 盲区站收工判定的前提（idleWrapCheck）
       hasPlayed = false; // 恢复后重新从 playing 上报收敛
       lastAdvanceBroadcast = now();
       if (resumeAfterBetween) {
@@ -687,7 +681,6 @@
         pendingLowerRank: pendingLowerRank && { name: pendingLowerRank.name, src: pendingLowerRank.src },
         prevHighRank,
         hasPlayedEver,
-        everBetween,
         endedReportedEver,
         endedSeen,
         wrapStatus, // {left:ms}|{blocked:原因}|null——与 idleWrapCheck 判定同源
@@ -1089,13 +1082,9 @@
     if (totalActiveMs() >= presetSec * 1000) stopAll("preset");
   }
 
-  // 分节静默收工：连播全部失效（课程放完/站点连播挂）时补 between 循环永不结束
-  // 的缺口——恢复续录后持续无播放（lastPlayingTs < resumeTs = 续录以来页面从未
-  // 在播）超过阈值 → 结束整场。hasPlayed 门槛天然豁免 playing 盲区站（路飞：
-  // hasPlayed 恒 false，收工判定不启用——其连播工作良好，挂了用户手点停止）。
-  // 分节静默收工：连播全部失效（课程放完/站点连播挂）时补 between 循环永不结束
-  // 的缺口——恢复续录后持续无播放（lastPlayingTs < resumeTs = 续录以来页面从未
-  // 在播）超过阈值 → 结束整场。
+  // 分节静默收工：恢复续录后持续无播放超过阈值 → 结束整场（补 between 循环
+  // 永不结束的缺口）。按 hasPlayedEver 自动分档（用户建议的黑白名单制）：
+  // playing 可见站走时间窗收工；盲区站（路飞）不适用，见 idleWrapCheck 内说明。
   let wrapStatus = null; // 收工判定真实状态（观测对齐 v2.8.6：面板倒计时与判定
   //   同源——{left:ms} 计时中 | {blocked:原因} 被挡 | null 未启用/已触发）
   function idleWrapCheck() {
@@ -1113,18 +1102,14 @@
     }
     // playing 盲区站（路飞 hasPlayedEver 恒 false）：路飞实锤（v2.8.11 诊断采集）——
     // 播放器 video 是空壳（paused=true/currentTime=0/尺寸 0x0），加密画面不经它
-    // 渲染，「播放中 vs 暂停」在当前权限集（无 host 权限红线）内无信号可测，
-    // 任何固定窗口必误杀其一（v2.8.7 窗口减半、v2.8.9 回退 2× 都只是调节误杀
-    // 面大小）。取舍（数据损失 > 便利性损失，v2.8.12）：恢复 everBetween 前提——
-    // 经历过节间的静止段（课程放完/弹窗卡死，连播链路必然经过）照常收工；
-    // 纯暂停（从未进 between，人在场）不自动收工，面板提示手动停止。
-    // 代价：路飞暂停后需手动停止（面板有提示）；收益：播放中的录制绝不被截断
-    if (!everBetween) { wrapStatus = { blocked: "信号盲区：播放/暂停不可检测，请手动停止" }; return; }
-    if (lastUrlChangeAt >= resumeTs || lastSplitAt >= resumeTs) { wrapStatus = { blocked: "有跳转/切节活动" }; return; }
-    const left = wrapSec * 1000 - (now() - resumeTs);
-    if (left > 0) { wrapStatus = { left }; return; }
-    wrapStatus = null;
-    stopAll("idle-wrap");
+    // 渲染，「播放中 vs 暂停/卡死」在当前权限集（无 host 权限红线）内无信号可测，
+    // 任何固定窗口必误杀其一。时间型收工整段退役（v2.8.14，用户拍板）：护栏
+    // `lastUrlChangeAt>=resumeTs || lastSplitAt>=resumeTs` 结构性恒死——切节链路
+    // 必把 resumeTs 刷新到两个时间戳之后（resumeCapture:356），v2.8.4~v2.8.12
+    // 的每个窗口版本都因此在切下一节后误杀正常播放（本轮用户复验实锤；v2.8.9
+    // 注释早已承认）。定稿：盲区站零时间型收工——连录永不被误杀；暂停/课程
+    // 放完/弹窗卡死由面板提示手动停止，需自动停用「定时停止」（不依赖播放信号）
+    wrapStatus = { blocked: "信号盲区：播放/暂停不可检测，请手动停止（可改用定时停止）" };
   }
 
   // 连播入口可见确认：播完弹窗类入口持续可见 → 内容已播完 → 停录进节间。

@@ -457,7 +457,11 @@ function render(st) {
   let wrapText = "";
   if (st.dbg && st.dbg.wrapStatus) {
     if (st.dbg.wrapStatus.left != null) wrapText = `无播放收工倒计时：${Math.ceil(st.dbg.wrapStatus.left / 1000)}s`;
-    else if (st.dbg.wrapStatus.blocked) wrapText = `收工延迟：${st.dbg.wrapStatus.blocked}`;
+    else if (st.dbg.wrapStatus.blocked) {
+      const b = st.dbg.wrapStatus.blocked;
+      // 盲区提示不是「延迟」而是收工不适用——原样显示，不加前缀
+      wrapText = b.startsWith("信号盲区") ? b : `收工延迟：${b}`;
+    }
   }
   $("wrapTip").textContent = wrapText;
 
