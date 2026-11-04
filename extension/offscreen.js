@@ -14,6 +14,7 @@
   let crop = null; // {rect, viewportW, viewportH}（schedule 时从 payload 解析）
   let cropOut = null; // 实际输出尺寸 {w,h} 与映射参数 {vw,vh,scale,letterbox}
   let cropError = "";
+  let cropMismatch = null; // 框选快照 vs 开录实测错配（v2.8.15 换屏防呆，popup 侧算好传入）
   let captureSize = null; // 捕获帧尺寸 {w,h}（视频轨 getSettings，无裁剪时也可见）
   let curViewport = null; // 页面实时视口 {w,h,dpr}（顶层帧上报，变化沿）
   let viewportDrift = false; // 当前视口与框选快照不一致（裁剪位置可能偏移，面板警告）
@@ -456,6 +457,7 @@
     mode = payload.mode === "segment" ? "segment" : "single";
     courseFolder = sanitize(payload.courseFolder || "", 40);
     crop = payload.crop && payload.crop.rect ? payload.crop : null;
+    cropMismatch = payload.cropMismatch || null; // 换屏/改窗错配（popup 开录前置校验，v2.8.15）——面板常显警告
 
     // 仅音频输出 webm（MP4 直录不支持纯音轨容器）；仅视频保持所选格式
     mime = settings.recordKind === "audio"
@@ -668,6 +670,7 @@
       signals: { hasPlayed, playingAgo: lastPlayingTs ? now() - lastPlayingTs : -1 },
       crop: cropOut,
       cropError,
+      cropMismatch,
       captureSize,
       curViewport,
       viewportDrift,
@@ -961,9 +964,16 @@
     if (data.url) onUrlChange(data.url);
     if (data.viewport && data.viewport.w > 0) {
       curViewport = data.viewport;
-      // 视口漂移检测：与框选时快照不一致 = 裁剪映射基准变了（缩放/窗口调整/
-      // 全屏等），选区位置可能偏移——仅提示不阻断（映射仍按框选快照，行为可预期）
-      if (crop) viewportDrift = !(curViewport.w === crop.viewportW && curViewport.h === crop.viewportH);
+      // 视口漂移检测：与框选时快照不一致 = 选区坐标系变了（缩放/窗口调整/换
+      // 显示器/全屏等），rect 是框选时刻视口坐标，映射必然错位——仅提示不阻断
+      //（映射基准实际取开录时实时视口优先、框选快照兜底，见 buildCropStream）。
+      // dpr 参与（v2.8.15）：换显示器窗口 CSS 尺寸恰好相同但 dpr 变也该提示；
+      // 旧快照无 dpr（=0）不参与比较，不误报
+      if (crop) {
+        const sizeDrift = !(curViewport.w === crop.viewportW && curViewport.h === crop.viewportH);
+        const dprDrift = !!(crop.dpr > 0 && curViewport.dpr > 0 && curViewport.dpr !== crop.dpr);
+        viewportDrift = sizeDrift || dprDrift;
+      }
     }
     if (data.playing) {
       // 任一帧有视频在播：刷新"最后在播"时刻（停播静默判定的基准）

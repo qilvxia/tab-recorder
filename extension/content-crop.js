@@ -160,6 +160,7 @@
         rect,
         viewportW: innerWidth,
         viewportH: innerHeight,
+        dpr: window.devicePixelRatio, // 换屏检测（v2.8.15）：dpr 变=显示器变，开录前置校验与 drift 判定用
       });
     } catch (e) { /* 扩展上下文失效时静默 */ }
     teardown();

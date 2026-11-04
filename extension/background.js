@@ -247,6 +247,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
               rect: msg.rect,
               viewportW: msg.viewportW,
               viewportH: msg.viewportH,
+              dpr: msg.dpr || 0, // 框选时刻 dpr（v2.8.15 换屏检测；旧快照无此字段=0 不参与比较）
               tabId: sender.tab && sender.tab.id,
               at: Date.now(),
             },

@@ -198,6 +198,22 @@ async function getCropRegion() {
   return cr && cr.rect && cr.tabId === (tabInfo && tabInfo.id) ? cr : null;
 }
 
+// 换屏/改窗检测（纯函数，node 单测可提取）：框选快照 vs 开录实测——视口尺寸不同、
+// 或两侧 dpr 都在且不同（换显示器典型信号：窗口尺寸恰好相同但 dpr 变）→ 返回错配
+// 描述；旧快照无 dpr（=0）或实测缺席时只比尺寸，不误报
+function detectCropMismatch(sel, cur) {
+  if (!sel || !cur) return null;
+  const selDpr = sel.dpr > 0 ? sel.dpr : null;
+  const curDpr = typeof cur.dpr === "number" && cur.dpr > 0 ? cur.dpr : null;
+  const sizeDiff = !(sel.viewportW === cur.cw && sel.viewportH === cur.ch);
+  const dprDiff = !!(selDpr && curDpr && selDpr !== curDpr);
+  if (!sizeDiff && !dprDiff) return null;
+  return {
+    selW: sel.viewportW, selH: sel.viewportH, selDpr,
+    curW: cur.cw, curH: cur.ch, curDpr,
+  };
+}
+
 async function refreshCropRow() {
   const cr = await getCropRegion();
   $("cropLabel").textContent = cr ? `已选 ${cr.rect.w}×${cr.rect.h} px` : "全画面";
@@ -242,7 +258,7 @@ async function startRecording() {
     tabUrl: tabInfo.url,
   };
   const cr = await getCropRegion();
-  if (cr) payload.crop = { rect: cr.rect, viewportW: cr.viewportW, viewportH: cr.viewportH };
+  if (cr) payload.crop = { rect: cr.rect, viewportW: cr.viewportW, viewportH: cr.viewportH, dpr: cr.dpr || 0 };
   // 捕获帧尺寸约束（物理像素）：Chrome 对 tabCapture 的帧尺寸自行协商且会话间
   // 会漂（实测漂到 16:10 档位 2240×1400 而窗口视口非等比）→ 内容非等比拉伸进帧，
   // 裁剪映射变形。显式请求「视口×dpr」让帧与视口内容等比，映射恢复成立。
@@ -253,6 +269,7 @@ async function startRecording() {
         w: Math.round(window.innerWidth * window.devicePixelRatio),
         h: Math.round(window.innerHeight * window.devicePixelRatio),
         cw: window.innerWidth, ch: window.innerHeight,
+        dpr: window.devicePixelRatio,
       }),
     });
     const cap = res && res.result;
@@ -260,6 +277,11 @@ async function startRecording() {
     // 开录时刻的视口（css）：帧与视口非等比时（Chrome 窗口化把画面拉伸进整屏帧）
     // 裁剪映射按此横纵独立换算的基准
     if (cap && cap.cw > 0 && cap.ch > 0) payload.viewport = { w: cap.cw, h: cap.ch };
+    // 开录前置校验（v2.8.15 换屏防呆）：rect 是「框选时刻视口」坐标系，框选后
+    // 换显示器/调窗口 = 坐标系变了，映射必然错位（横纵按新旧视口比例各自偏移）。
+    // 不阻断（知情继续），面板录制中常显警告直到重新框选
+    const mm = detectCropMismatch(cr, cap);
+    if (mm) payload.cropMismatch = mm;
   } catch (e) { /* 读不到视口（受限页等）就不约束，维持 Chrome 默认协商 */ }
   $("startBtn").disabled = true;
   $("startBtn").textContent = "正在启动…";
@@ -478,6 +500,10 @@ function render(st) {
   if (st.captureSize && st.captureSize.w) {
     const cv = st.curViewport ? `，当前视口 ${st.curViewport.w}×${st.curViewport.h}·dpr${st.curViewport.dpr}` : "";
     tips.push(`捕获帧 ${st.captureSize.w}×${st.captureSize.h}${cv}`);
+  }
+  if (st.cropMismatch) {
+    const m = st.cropMismatch;
+    tips.push(`⚠ 选区基于不同窗口/显示器（框选时 ${m.selW}×${m.selH}·dpr${m.selDpr == null ? "?" : m.selDpr} → 当前 ${m.curW}×${m.curH}·dpr${m.curDpr == null ? "?" : m.curDpr}），裁剪范围可能不准——建议停止后重新框选`);
   }
   if (st.viewportDrift && st.crop) {
     tips.push(`⚠ 窗口/页面大小已变化（框选时 ${st.crop.viewportW}×${st.crop.viewportH}），裁剪位置可能偏移——建议停止后重新框选`);
