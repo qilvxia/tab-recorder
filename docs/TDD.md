@@ -58,7 +58,7 @@ offscreen 里把捕获流的音频轨接 MediaStreamSource → destination。仅
 | P4 | `executeScript` 的 `allFrames` 必须放在 `target` 里（顶层放法 MV3 参数校验直接报错）；Promise 形式返回 **InjectionResult[]**（解构成单对象=后续 `.filter` 崩）；失败的帧静默缺席；懒加载 iframe 只注入**已存在**的帧 | 注入封装统一形态 `{target:{tabId, allFrames:true}}`；结果按 `frameId` 对齐不按索引；keepalive 周期补注入（约 6 秒）覆盖后出现的 iframe |
 | P5 | `chrome.storage.session` 默认**不对 content script 开放**（untrusted 上下文），Promise 直接 reject | 默认策略：content script 不直接读 session，一切会话态查询走 SW 消息；SW 启动时若开放需 `setAccessLevel({accessLevel:"TRUSTED_AND_UNTRUSTED_CONTEXTS"})`。铁律：**任何 Promise 链的 catch 不得静默吞掉主流程**（实锤：冷却查询被吞 → 点击分支永不执行 → 连播全灭） |
 | P6 | 内容脚本只在「值变化」时上报会丢初始状态：复录同一页面，新 offscreen 收不到任何数据 | `detect-config` 消息必须触发强制上报（forceReport）；playing=true 期间**每轮心跳上报**（见第 10 章对照表 #7） |
-| P7 | tabCapture 的 getUserMedia **无视宽高约束**（`{ideal}` 对象与数字直填都被忽略）；窗口化（非最大化）录制时帧取**整屏逻辑尺寸**且内容**非等比拉伸**填满（实测：150% 缩放 3360×2100 屏 → 帧 2240×1400，横向缩放 1.5365 vs 纵向 1.559）；最大化时帧≈视口、等比 | 裁剪映射做**双模型自适应**：横纵比例偏差 ≥1% → 拉伸模型（横纵独立换算）；<1% → 黑边模型（等比+垂直居中补黑边）。帧尺寸以 `videoWidth` 为真值。残余偏移场景（YouTube 窗口化）按 PRD 已知限制放弃 |
+| P7 | tabCapture 的 getUserMedia **无视宽高约束**（`{ideal}` 对象与数字直填都被忽略）；窗口化录制时帧取**整屏逻辑尺寸**（例：150% 缩放 3360×2100 屏 → 帧 2240×1400，与窗口视口 1494×773 无关），窗口画面**等比缩放+居中补黑边**放进帧（黑边=帧里未被窗口内容占据的区域；用户面板数字实锤：上下黑边 ~120px ≈ (1400−773×1.499)/2）；最大化时黑边≈0 | 裁剪映射用**单一广义黑边定律**（v2.8.16 定稿，历史 v2.5.3 曾误判出「拉伸模型」——当年黑边仅 ~10px 两模型不可区分，且 maximized 场景两模型等价验证不出分歧；其真正修好的是映射基准改用开录实时视口）。帧尺寸以 `videoWidth` 为真值 |
 | P8 | tabCapture 启动即切断标签页原声 | R4 回环。另：窗口被完全遮挡/最小化时画面冻结、声音正常（浏览器省电机制 CalculateNativeWinOcclusion）——产品文档需告知用户保持窗口可见 |
 | P9 | Chrome 直录 MP4 的 `duration=0`（已知行为） | 不在扩展内修；需要时长时外部 ffmpeg `-c copy` 修复 |
 | P10 | 下载重名时 Chrome 自动加 " (n)" 后缀 | 锚点轮询匹配放宽：`base === name || base.startsWith(name + " (")` |
@@ -155,7 +155,6 @@ UI 结构（id 即契约，重写可换名但交互语义不变）：
 | entryStableMs | 3000 | 连播入口持续可见确认期 |
 | betweenTimeoutMs | 30000 | 节间超时自动续录 |
 | takeoverStableMs | 2000 | 降级识别源接管稳定期 |
-| stretchEpsilon | 0.01 | 裁剪拉伸模型判定阈值（≥1%） |
 | advanceFallbackMs | 45000 | 连播兜底广播间隔 |
 | finishDeadlineMs | 300000 | 锚点落定上限 5 分钟 |
 | idleDiscardBytes | 2×1024² | 切节/停录的内容硬前提（小段丢弃阈值） |
@@ -171,7 +170,7 @@ UI 结构（id 即契约，重写可换名但交互语义不变）：
 - 单段：手填 > 识别标题（非 junk）> `录制_YYYYMMDD-HHMMSS`。
 - 分节：课程前缀（截 40）非空 → `前缀_两位节序-课时名或第N节`；空 → `两位节序-课时名`。
 
-**裁剪 `buildCropStream`（P7）**：基准视口 = payload.viewport（开录时刻）否则框选快照，双无效回退帧自身（scale=1）。`sxScale=vw/vp.w, syScale=vh/vp.h`；`|syScale/sxScale−1| ≥ 0.01` → 拉伸模型（横纵独立换算），否则黑边模型（`scale=sxScale`，`letterbox=max(0,(vh−vp.h×scale)/2)` 垂直居中）。宽高向下取偶；<16px 抛错降级全画面（cropError 面板可见）。canvas `setInterval(draw, max(1000/fps, 8ms))` 绘制（offscreen 无 rAF，P4 同因），`captureStream(fps)` 视频轨 + 原音频轨合成。getUserMedia 宽高约束：legacy mandatory 数字直填，抛错删约束降级重试（P7：反正多半被无视）。makeRecorder 按 recordKind 过滤轨道（回环不受影响，R4）。
+**裁剪 `buildCropStream`（P7）**：基准视口 = payload.viewport（开录时刻）否则框选快照，双无效回退帧自身（scale=1 零 offset）。**单一广义黑边定律（纯函数 cropMapRect，node 单测覆盖）**：`scale=min(vw/vp.w, vh/vp.h)`，`offsetX=(vw−vp.w×scale)/2`，`offsetY=(vh−vp.h×scale)/2`，采样 `sx=rect.x×scale+offsetX`（y 同理）——纵横比一致时双 offset=0（最大化窗口），左右黑边镜像情形自动覆盖。宽高向下取偶；<16px 抛错降级全画面（cropError 面板可见）。canvas `setInterval(draw, max(1000/fps, 8ms))` 绘制（offscreen 无 rAF，P4 同因），`captureStream(fps)` 视频轨 + 原音频轨合成。getUserMedia 宽高约束：legacy mandatory 数字直填，抛错删约束降级重试（P7：反正多半被无视）。makeRecorder 按 recordKind 过滤轨道（回环不受影响，R4）。
 
 ### 5.5 content-detect
 
@@ -323,7 +322,7 @@ hasPlayedEver = false（黑名单/盲区站）:
 | 11 | between 收尾不等锚点确认 | "保存确认了再继续" | 等确认让续录晚几秒，吞新节开头（v2.3.3 每节丢开头 5s 实锤） |
 | 12 | 冷却查询同步抛=彻底放弃不降级点击 | "查询失败就绕过冷却直接点" | 旧死实例的定时器还在跑，绕过冷却会真跳课；storage.session 默认对 content script reject（实锤连播全灭） |
 | 13 | 主动补注入（token 清死守卫） | "守卫防重复注入就好" | 扩展重载后旧实例守卫残留，新注入被静默挡掉 → 识别+连播全链死亡且永不自愈（用户连报 9 版的根因） |
-| 14 | 裁剪双模型（拉伸/黑边自适应） | "帧=视口等比+黑边一条公式" | Chrome 窗口化帧取整屏逻辑尺寸且非等比拉伸（1.5% 变形）→ 单模型必然错位（数字实锤见 P7） |
+| 14 | 裁剪单一广义黑边定律（等比缩放+双向居中补偿） | "Chrome 会把窗口画面拉伸撑满帧" | 用户面板数字实锤（v2.8.16）：窗口化场景帧 2240×1400 装视口 1494×773，拉伸模型录出上下各多 ~100px（黑边 ~120px 被当内容）；历史 v2.5.3 拉伸模型是 ~10px 黑边场景下的误判，maximized 等价场景验证不出（详见 P7） |
 
 ---
 

@@ -492,10 +492,7 @@ function render(st) {
   if (st.crop) tips.push(`仅录制所选区域（${st.crop.w}×${st.crop.h}）。`);
   if (st.cropError) tips.push("区域裁剪启动失败，已按全画面录制：" + st.cropError);
   if (st.crop && st.crop.vw) {
-    const map = st.crop.stretch
-      ? `拉伸 x${st.crop.sxScale.toFixed(3)}/y${st.crop.syScale.toFixed(3)}`
-      : `scale ${st.crop.scale.toFixed(3)} · 黑边 ${Math.round(st.crop.letterbox)}px`;
-    tips.push(`裁剪帧 ${st.crop.vw}×${st.crop.vh} · ${map}（框选视口 ${st.crop.viewportW}×${st.crop.viewportH}）`);
+    tips.push(`裁剪帧 ${st.crop.vw}×${st.crop.vh} · scale ${st.crop.scale.toFixed(3)} · 黑边 上${Math.round(st.crop.offsetY)}px·左右${Math.round(st.crop.offsetX)}px（框选视口 ${st.crop.viewportW}×${st.crop.viewportH}）`);
   }
   if (st.captureSize && st.captureSize.w) {
     const cv = st.curViewport ? `，当前视口 ${st.curViewport.w}×${st.curViewport.h}·dpr${st.curViewport.dpr}` : "";

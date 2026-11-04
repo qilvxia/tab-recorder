@@ -50,7 +50,6 @@
     entryStableMs: 3000, // 连播入口（播完弹窗）持续可见这么久才停录：滤动画/闪现误报
     betweenTimeoutMs: 30000, // 节间等待超时：无恢复信号也自动续录（入口误报/加载过慢兜底）
     takeoverStableMs: 2000, // 降级识别源稳定这么久且高 rank 值未变 → 接管命名
-    stretchEpsilon: 0.01, // 帧纵横比与视口纵横比差超过此值 → 拉伸模型（横纵独立换算）
     advanceFallbackMs: 45000, // 连播定时兜底广播间隔
     finishDeadlineMs: 300000, // 大文件锚点落定上限 5 分钟
     idleDiscardBytes: 2 * 1024 * 1024, // 节间黑屏小段丢弃阈值（连播点击前弹窗期录到的部分）
@@ -213,43 +212,22 @@
       });
     }
     const vw = video.videoWidth, vh = video.videoHeight;
-    // 帧模型自适应（映射基准 = 开录时刻视口，框选视口兜底）：
-    // - 拉伸模型：Chrome 窗口化录制时帧取**整屏逻辑尺寸**（约束被平台忽略），
-    //   窗口画面被**非等比拉伸**填满帧（实测横向 1.5365/纵向 1.559，差 1.5%）
-    //   → 横纵独立换算；
-    // - 黑边模型：帧=视口×scale 等比 + 垂直居中补黑边（Edge 实测定律，
-    //   diag_crop 验证）→ 等比换算 + letterbox 补偿。
-    // 判定：帧纵横比 vs 视口纵横比差 ≥1%（非等比）→ 拉伸；否则黑边。
-    // 最大化窗口时两模型等价（帧≈视口×dpr，letterbox≈0）。
+    // 帧几何定律（v2.8.16 定稿，用户面板数字实锤）：Chrome 对 tabCapture 的宽高
+    // 约束一律无视（平台行为），窗口化录制时帧取**整屏逻辑尺寸**，窗口画面
+    // **等比缩放 + 居中补黑边**放进帧里（按帧/视口较小比值缩放，剩余维度居中）。
+    // 映射必须反算黑边 offset，否则采样窗把黑边当内容（窗口化场景上下各多吞
+    // ~120px，用户实测）。历史注记：v2.5.3 的「拉伸模型」是对当年 ~10px 黑边
+    // 场景的误判（两模型不可区分）；真正治好当时问题的是映射基准改用开录实时
+    // 视口（payload.viewport，本版保留）；最大化窗口黑边=0 两模型等价，故验证
+    // 一直未暴露。v2.4 时代 diag_crop 验证的原始定律即本定律。
+    // 映射基准 = 开录时刻实时视口，框选视口兜底；双基准均无效（w=0/undefined）
+    // 时回退帧自身（scale=1 零 offset）——防 NaN 沿 Math.min/max 静默扩散（审计低项）
     const vpRaw = (pendingPayload && pendingPayload.viewport && pendingPayload.viewport.w > 0)
       ? pendingPayload.viewport
       : { w: crop.viewportW, h: crop.viewportH };
-    // 双基准均无效（w=0/undefined）时回退帧自身尺寸（scale=1 黑边模型）——
-    // 防 NaN 沿 Math.min/max 静默扩散（审计低项）
     const vp = vpRaw.w > 0 && vpRaw.h > 0 ? vpRaw : { w: vw, h: vh };
-    const sxScale = vw / vp.w;
-    const syScale = vh / vp.h;
-    const stretch = Math.abs(syScale / sxScale - 1) >= SEG.stretchEpsilon;
-    const r = crop.rect;
-    let sx, sy, sw, sh, letterbox = 0, scale;
-    if (stretch) {
-      sx = Math.min(Math.max(0, Math.floor(r.x * sxScale)), vw - 2);
-      sy = Math.min(Math.max(0, Math.floor(r.y * syScale)), vh - 2);
-      sw = Math.min(vw - sx, Math.floor(r.w * sxScale));
-      sh = Math.min(vh - sy, Math.floor(r.h * syScale));
-      scale = 0; // 拉伸模型无单一 scale（面板显示双比例）
-    } else {
-      // 实测定律（diag_crop.py）：tabCapture 帧按 视口宽 统一缩放；当帧纵横比与
-      // 视口不一致时垂直居中、上下补黑边。无黑边时 offset 自然为 0。
-      scale = sxScale;
-      letterbox = Math.max(0, (vh - vp.h * scale) / 2);
-      sx = Math.min(Math.max(0, Math.floor(r.x * scale)), vw - 2);
-      sy = Math.min(Math.max(0, Math.floor(r.y * scale + letterbox)), vh - 2);
-      sw = Math.min(vw - sx, Math.floor(r.w * scale));
-      sh = Math.min(vh - sy, Math.floor(r.h * scale));
-    }
-    sw -= sw % 2; sh -= sh % 2; // H.264 yuv420 要求偶数尺寸
-    if (sw < 16 || sh < 16) throw new Error("裁剪区域换算后过小");
+    const map = cropMapRect(crop.rect, vw, vh, vp.w, vp.h);
+    const { sx, sy, sw, sh } = map;
 
     const canvas = document.createElement("canvas");
     canvas.width = sw;
@@ -266,11 +244,27 @@
     const timer = setInterval(draw, Math.max(1000 / fps, 8));
     const canvasStream = canvas.captureStream(fps);
     cropPipe = { video, canvasStream, timer };
-    cropOut = { w: sw, h: sh, vw, vh, scale, sxScale, syScale, stretch, letterbox, viewportW: crop.viewportW, viewportH: crop.viewportH }; // 映射参数入面板：缩放错位时对照两端数字
+    cropOut = { w: sw, h: sh, vw, vh, scale: map.scale, offsetX: map.offsetX, offsetY: map.offsetY, viewportW: crop.viewportW, viewportH: crop.viewportH }; // 映射参数入面板：缩放错位时对照两端数字
     return new MediaStream([
       canvasStream.getVideoTracks()[0],
       ...srcStream.getAudioTracks(),
     ]);
+  }
+
+  // 裁剪映射纯函数（广义黑边定律，node 单测覆盖）：帧内容区 = 视口等比缩放 +
+  // 双向居中；scale 取帧/视口两比值中较小者（小者决定内容装得下），另一维度
+  // 的差值即黑边。纵横比一致时双 offset=0（最大化窗口），行为与既往一致。
+  function cropMapRect(rect, vw, vh, vpW, vpH) {
+    const scale = Math.min(vw / vpW, vh / vpH);
+    const offsetX = (vw - vpW * scale) / 2;
+    const offsetY = (vh - vpH * scale) / 2;
+    let sx = Math.min(Math.max(0, Math.floor(rect.x * scale + offsetX)), vw - 2);
+    let sy = Math.min(Math.max(0, Math.floor(rect.y * scale + offsetY)), vh - 2);
+    let sw = Math.min(vw - sx, Math.floor(rect.w * scale));
+    let sh = Math.min(vh - sy, Math.floor(rect.h * scale));
+    sw -= sw % 2; sh -= sh % 2; // H.264 yuv420 要求偶数尺寸
+    if (sw < 16 || sh < 16) throw new Error("裁剪区域换算后过小");
+    return { sx, sy, sw, sh, scale, offsetX, offsetY };
   }
 
   function destroyCropPipe() {
