@@ -99,7 +99,7 @@ offscreen 里把捕获流的音频轨接 MediaStreamSource → destination。仅
 - **background（SW）**：无业务状态的状态路由器——签发 streamId、注入检测脚本、锚点落定轮询、徽章、tab 事件监听。
 - **offscreen**：录制引擎（状态机+信号裁决+保存）。业务大脑。
 - **content-detect**：页面信号采集（课时名/URL/播放/弹窗入口）+ 连播点击执行。每帧一份实例，顶层帧限定强信号。
-- **content-crop**：框选浮层（Shadow DOM），仅在用户点「框选区域」时注入。
+- **content-crop**：框选浮层（Shadow DOM），仅在用户点「框选区域」时注入。交互（v2.8.17）：空白拖拽新建 + 8 句柄微调（四角双向/四边单向，纯函数 applyDrag：比例锁定下角=对角锚定等比、边=另一维跟随，下限 40×30 与视口钳制）+ 框内整体移动 + 双击/回车确认 + Esc 取消。
 
 启动链：popup `start` → SW 写 session + `offscreen-schedule`（预约式，此刻不取流）→ 倒计时归零 offscreen 发 `request-capture` → SW `tabCapture.getMediaStreamId({targetTabId})` + 注入 detector → offscreen `getUserMedia({chromeMediaSource:'tab', streamId})` → beginCapture → startSegment。
 

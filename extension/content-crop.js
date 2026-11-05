@@ -20,6 +20,25 @@
         border: 2px solid #4f8cff; background: rgba(79,140,255,.08);
         box-shadow: 0 0 0 100000px rgba(0,0,0,.45);
       }
+      /* 微调句柄（v2.8.17）：四角双向 + 四边单向，压在边框上、角向外溢出便于抓取 */
+      .hn { position: absolute; background: transparent; }
+      .hn[data-h=n], .hn[data-h=s] {
+        left: 16px; right: 16px; height: 12px; margin-top: -6px; cursor: ns-resize;
+      }
+      .hn[data-h=n] { top: 0; }
+      .hn[data-h=s] { bottom: 0; }
+      .hn[data-h=e], .hn[data-h=w] {
+        top: 16px; bottom: 16px; width: 12px; margin-left: -6px; cursor: ew-resize;
+      }
+      .hn[data-h=e] { right: 0; }
+      .hn[data-h=w] { left: 0; }
+      .hn[data-h=nw], .hn[data-h=ne], .hn[data-h=sw], .hn[data-h=se] {
+        width: 16px; height: 16px;
+      }
+      .hn[data-h=nw] { left: -8px; top: -8px; cursor: nwse-resize; }
+      .hn[data-h=ne] { right: -8px; top: -8px; cursor: nesw-resize; }
+      .hn[data-h=sw] { left: -8px; bottom: -8px; cursor: nesw-resize; }
+      .hn[data-h=se] { right: -8px; bottom: -8px; cursor: nwse-resize; }
       .size {
         position: absolute; left: 0; top: -26px; white-space: nowrap;
         background: rgba(20,24,32,.9); color: #fff; font-size: 12px;
@@ -47,7 +66,13 @@
       .hint { font-size: 11.5px; color: #9aa7b8; width: 100%; text-align: center; }
     </style>
     <div class="stage"></div>
-    <div class="box"><span class="size"></span></div>
+    <div class="box">
+      <span class="size"></span>
+      <div class="hn" data-h="n"></div><div class="hn" data-h="s"></div>
+      <div class="hn" data-h="e"></div><div class="hn" data-h="w"></div>
+      <div class="hn" data-h="nw"></div><div class="hn" data-h="ne"></div>
+      <div class="hn" data-h="sw"></div><div class="hn" data-h="se"></div>
+    </div>
     <div class="bar">
       <b>录制区域</b>
       <button class="r active" data-r="0">自由</button>
@@ -57,7 +82,7 @@
       <span class="sep"></span>
       <button class="op ok" disabled>确认</button>
       <button class="op cancel">取消</button>
-      <span class="hint">拖拽框选区域 · 双击框内或回车确认 · Esc 取消</span>
+      <span class="hint">拖拽框选 · 拖边/角微调 · 框内移动 · 双击或回车确认 · Esc 取消</span>
     </div>
   `;
 
@@ -68,7 +93,7 @@
   const bar = root.querySelector(".bar");
 
   let ratio = 0; // 0 = 自由，否则为 宽/高
-  let drag = null; // {x0, y0}
+  let drag = null; // {mode:"draw"|"move"|句柄名, x0, y0, rect0?}
   let rect = null; // {x, y, w, h}
   let done = false;
 
@@ -79,6 +104,49 @@
       x: Math.min(Math.max(0, r.x), W - w),
       y: Math.min(Math.max(0, r.y), H - h),
       w, h,
+    };
+  }
+
+  // 微调拖拽纯函数（v2.8.17，node 单测覆盖）：按句柄模式把位移增量作用到起始
+  // 快照上。四边只动自己的轴；四角双向；比例锁定时——四角对角锚定等比（宽由
+  // 水平位移驱动、高=宽/比例，锚在对面角），四边另一维跟随（e/w 锚 y、n/s 锚
+  // x）。下限 40×30 与视口越界全程钳制（下限优先于比例：极小时比例暂时让位）。
+  function applyDrag(mode, start, dx, dy, ratio, W, H) {
+    if (mode === "move") {
+      const r = { x: start.x + dx, y: start.y + dy, w: start.w, h: start.h };
+      const w = Math.min(Math.max(0, r.w), W), h = Math.min(Math.max(0, r.h), H);
+      return {
+        x: Math.min(Math.max(0, r.x), W - w),
+        y: Math.min(Math.max(0, r.y), H - h),
+        w, h,
+      };
+    }
+    let x = start.x, y = start.y, w = start.w, h = start.h;
+    const hasE = mode.includes("e"), hasW = mode.includes("w");
+    const hasN = mode.includes("n"), hasS = mode.includes("s");
+    const corner = (hasE || hasW) && (hasN || hasS);
+    if (corner && ratio) {
+      if (hasE) w = Math.max(MIN_W, start.w + dx);
+      else w = Math.max(MIN_W, start.w - dx);
+      h = w / ratio;
+      if (h < MIN_H) { h = MIN_H; w = h * ratio; }
+      if (hasW) x = start.x + start.w - w;
+      if (hasN) y = start.y + start.h - h;
+    } else {
+      if (hasE) w = Math.max(MIN_W, start.w + dx);
+      else if (hasW) { w = Math.max(MIN_W, start.w - dx); x = start.x + start.w - w; }
+      if (hasS) h = Math.max(MIN_H, start.h + dy);
+      else if (hasN) { h = Math.max(MIN_H, start.h - dy); y = start.y + start.h - h; }
+      if (ratio) {
+        if (hasE || hasW) { h = w / ratio; if (h < MIN_H) h = MIN_H; }
+        else { w = h * ratio; if (w < MIN_W) w = MIN_W; }
+      }
+    }
+    const cw = Math.min(Math.max(0, w), W), ch = Math.min(Math.max(0, h), H);
+    return {
+      x: Math.min(Math.max(0, x), W - cw),
+      y: Math.min(Math.max(0, y), H - ch),
+      w: cw, h: ch,
     };
   }
 
@@ -111,21 +179,28 @@
     if (!e.isTrusted) return; // 合成事件不可作为选区确认依据
     if (e.target !== stage || e.button !== 0) return;
     stage.setPointerCapture(e.pointerId);
-    drag = { x0: e.clientX, y0: e.clientY };
+    drag = { mode: "draw", x0: e.clientX, y0: e.clientY };
     rect = { x: e.clientX, y: e.clientY, w: 0, h: 0 };
     render();
   });
   stage.addEventListener("pointermove", (e) => {
-    if (drag) setRectFrom({ x: e.clientX, y: e.clientY });
+    if (!drag) return;
+    if (drag.mode === "draw") {
+      setRectFrom({ x: e.clientX, y: e.clientY });
+    } else {
+      rect = applyDrag(drag.mode, drag.rect0, e.clientX - drag.x0, e.clientY - drag.y0, ratio, innerWidth, innerHeight);
+      render();
+    }
   });
   stage.addEventListener("pointerup", () => { drag = null; });
 
   box.addEventListener("pointerdown", (e) => {
-    if (!e.isTrusted) return;
-    // 框上按下=重新框选（从当前位置起拖可微调），双击=确认
-    if (e.button !== 0) return;
+    if (!e.isTrusted || e.button !== 0 || !rect) return;
+    // 句柄=边/角微调；框内（非句柄）=整体移动（v2.8.17）；双击=确认；
+    // 重拉新框仍在框外空白处按下
+    const hn = e.target.closest && e.target.closest("[data-h]");
     stage.setPointerCapture(e.pointerId);
-    drag = { x0: e.clientX, y0: e.clientY };
+    drag = { mode: hn ? hn.dataset.h : "move", x0: e.clientX, y0: e.clientY, rect0: { ...rect } };
   });
   box.addEventListener("pointerup", () => { drag = null; });
   box.addEventListener("dblclick", () => confirm());
