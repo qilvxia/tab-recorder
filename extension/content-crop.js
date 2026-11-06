@@ -16,12 +16,12 @@
       * { box-sizing: border-box; margin: 0; padding: 0; font: 13px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
       .stage { position: fixed; inset: 0; cursor: crosshair; touch-action: none; }
       .box {
-        position: fixed; display: none; cursor: move;
+        position: fixed; display: none; cursor: move; touch-action: none;
         border: 2px solid #4f8cff; background: rgba(79,140,255,.08);
         box-shadow: 0 0 0 100000px rgba(0,0,0,.45);
       }
       /* 微调句柄（v2.8.17）：四角双向 + 四边单向，压在边框上、角向外溢出便于抓取 */
-      .hn { position: absolute; background: transparent; }
+      .hn { position: absolute; background: transparent; touch-action: none; }
       .hn[data-h=n], .hn[data-h=s] {
         left: 16px; right: 16px; height: 12px; margin-top: -6px; cursor: ns-resize;
       }
@@ -150,7 +150,7 @@
     };
   }
 
-  function render() {
+  function renderNow() {
     if (!rect) return;
     box.style.display = "block";
     box.style.left = rect.x + "px";
@@ -161,6 +161,15 @@
     size.style.left = rect.w < 90 ? "0" : "6px";
     size.style.top = rect.y < 30 ? rect.h + 4 + "px" : "-26px";
     okBtn.disabled = !(rect.w >= MIN_W && rect.h >= MIN_H);
+  }
+
+  let renderPending = false;
+  // rAF 合并（v2.8.18）：拖拽期 pointermove 频率高于渲染帧率，一帧至多绘一次——
+  // 100000px box-shadow 遮罩层整页重绘，逐事件渲染在重页面（视频播放中）会卡顿
+  function render() {
+    if (renderPending) return;
+    renderPending = true;
+    requestAnimationFrame(() => { renderPending = false; renderNow(); });
   }
 
   function setRectFrom(dragTo) {
@@ -185,6 +194,10 @@
   });
   stage.addEventListener("pointermove", (e) => {
     if (!drag) return;
+    // 自愈守卫（v2.8.18）：pointercancel/窗口失焦等泄漏路径会吞掉 pointerup，
+    // drag 残留时任何纯移动都会驱动渲染（用户实锤「松开后移动仍调尺寸」）——
+    // 无键移动一律视为拖拽已死，清状态并忽略本事件
+    if (e.buttons === 0) { drag = null; return; }
     if (drag.mode === "draw") {
       setRectFrom({ x: e.clientX, y: e.clientY });
     } else {
@@ -192,7 +205,13 @@
       render();
     }
   });
-  stage.addEventListener("pointerup", () => { drag = null; });
+  const clearDrag = () => { drag = null; };
+  stage.addEventListener("pointerup", clearDrag);
+  // 手势接管/失焦泄漏源（v2.8.18）：这些路径浏览器不派发 pointerup——不监听
+  // 则 drag 永久残留，靠上面的 buttons 守卫兜底自愈
+  stage.addEventListener("pointercancel", clearDrag);
+  stage.addEventListener("lostpointercapture", clearDrag);
+  window.addEventListener("blur", clearDrag); // 拖拽中切窗口/失焦：up 事件可能丢失
 
   box.addEventListener("pointerdown", (e) => {
     if (!e.isTrusted || e.button !== 0 || !rect) return;
@@ -202,7 +221,7 @@
     stage.setPointerCapture(e.pointerId);
     drag = { mode: hn ? hn.dataset.h : "move", x0: e.clientX, y0: e.clientY, rect0: { ...rect } };
   });
-  box.addEventListener("pointerup", () => { drag = null; });
+  box.addEventListener("pointerup", clearDrag);
   box.addEventListener("dblclick", () => confirm());
 
   root.querySelectorAll(".r").forEach((b) => {
