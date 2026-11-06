@@ -21,9 +21,9 @@ function makeEl() {
   };
   return el;
 }
-const stage = makeEl(), box = makeEl(), size = makeEl(), okBtn = makeEl(), cancelBtn = makeEl(), bar = makeEl();
+const stage = makeEl(), box = makeEl(), size = makeEl(), okBtn = makeEl(), cancelBtn = makeEl(), diagBtn = makeEl(), bar = makeEl();
 const root = Object.assign(makeEl(), {
-  querySelector: (s) => ({ ".stage": stage, ".box": box, ".size": size, ".op.ok": okBtn, ".op.cancel": cancelBtn, ".bar": bar }[s] || null),
+  querySelector: (s) => ({ ".stage": stage, ".box": box, ".size": size, ".op.ok": okBtn, ".op.cancel": cancelBtn, ".op.diag": diagBtn, ".bar": bar }[s] || null),
 });
 const handle = { dataset: { h: "se" } }; handle.closest = () => handle;
 const documentStub = Object.assign(makeEl(), {
@@ -96,6 +96,17 @@ t("C 按住拖拽照常（520×330）", box.style.width === "520px" && box.style
 const d0 = dims();
 fire(windowStub, "pointermove", E({ clientX: 900, clientY: 700, buttons: 0, button: -1 }));
 t("D 无拖拽时纯移动零副作用", JSON.stringify(d0) === JSON.stringify(dims()));
+
+// F. 双通道幂等（v2.8.20）：同一手势内，同一 move 事件从 window 捕获与 stage
+//    冒泡两路先后到达，第二次处理不得再改变结果（applyDrag 快照式确定性）
+fire(box, "pointerdown", E({ clientX: 820, clientY: 630, target: handle })); // se 角（当前 520×330）
+const evBoth = E({ clientX: 840, clientY: 650 });
+fire(windowStub, "pointermove", evBoth);
+const once = dims();
+fire(stage, "pointermove", evBoth); // 同一事件对象第二路
+const twice = dims();
+fire(windowStub, "pointerup", E({}));
+t("F 双通道幂等（同事件两路结果一致）", JSON.stringify(once) === JSON.stringify(twice), { once, twice });
 
 console.log(fail ? "RESULT: FAIL (" + fail + ")" : "RESULT: PASS");
 process.exit(fail ? 1 : 0);

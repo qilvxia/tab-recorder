@@ -14,14 +14,17 @@
     <style>
       :host { all: initial; }
       * { box-sizing: border-box; margin: 0; padding: 0; font: 13px/1.5 system-ui, "Microsoft YaHei", sans-serif; }
-      .stage { position: fixed; inset: 0; cursor: crosshair; touch-action: none; }
+      .stage { position: fixed; inset: 0; cursor: crosshair; touch-action: none;
+               user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
       .box {
         position: fixed; display: none; cursor: move; touch-action: none;
+        user-select: none; -webkit-user-select: none; -webkit-user-drag: none;
         border: 2px solid #4f8cff; background: rgba(79,140,255,.08);
         box-shadow: 0 0 0 100000px rgba(0,0,0,.45);
       }
       /* 微调句柄（v2.8.17）：四角双向 + 四边单向，压在边框上、角向外溢出便于抓取 */
-      .hn { position: absolute; background: transparent; touch-action: none; }
+      .hn { position: absolute; background: transparent; touch-action: none;
+            user-select: none; -webkit-user-select: none; -webkit-user-drag: none; }
       .hn[data-h=n], .hn[data-h=s] {
         left: 16px; right: 16px; height: 12px; margin-top: -6px; cursor: ns-resize;
       }
@@ -63,6 +66,7 @@
       }
       .op.ok { background: #2f9e5f; border-color: #2f9e5f; color: #fff; font-weight: 600; }
       .op.ok:disabled { opacity: .45; cursor: not-allowed; }
+      .op.diag { font-size: 11.5px; padding: 4px 10px; color: #9aa7b8; }
       .hint { font-size: 11.5px; color: #9aa7b8; width: 100%; text-align: center; }
     </style>
     <div class="stage"></div>
@@ -82,6 +86,7 @@
       <span class="sep"></span>
       <button class="op ok" disabled>确认</button>
       <button class="op cancel">取消</button>
+      <button class="op diag">复制诊断</button>
       <span class="hint">拖拽框选 · 拖边/角微调 · 框内移动 · 双击或回车确认 · Esc 取消</span>
     </div>
   `;
@@ -91,6 +96,7 @@
   const size = root.querySelector(".size");
   const okBtn = root.querySelector(".op.ok");
   const bar = root.querySelector(".bar");
+  const diagBtn = root.querySelector(".op.diag");
 
   let ratio = 0; // 0 = 自由，否则为 宽/高
   let drag = null; // {mode:"draw"|"move"|句柄名, x0, y0, rect0?}
@@ -187,9 +193,12 @@
   stage.addEventListener("pointerdown", (e) => {
     if (!e.isTrusted) return; // 合成事件不可作为选区确认依据
     if (e.target !== stage || e.button !== 0) return;
-    stage.setPointerCapture(e.pointerId);
+    // 不调 setPointerCapture（v2.8.20）：window 捕获监听架构下无必要；且捕获
+    // 会改变浏览器对后续 pointer 事件的派发路径（可能直达捕获元素、绕过 window
+    // 捕获阶段监听）——用户 Chrome 实测「拖几像素即完全冻结」的头号嫌疑
     drag = { mode: "draw", x0: e.clientX, y0: e.clientY };
     rect = { x: e.clientX, y: e.clientY, w: 0, h: 0 };
+    logEv("down", e);
     render();
     attachGesture();
   });
@@ -198,18 +207,17 @@
     // 句柄=边/角微调；框内（非句柄）=整体移动（v2.8.17）；双击=确认；
     // 重拉新框仍在框外空白处按下
     const hn = e.target.closest && e.target.closest("[data-h]");
-    stage.setPointerCapture(e.pointerId);
     drag = { mode: hn ? hn.dataset.h : "move", x0: e.clientX, y0: e.clientY, rect0: { ...rect } };
+    logEv("down:" + drag.mode, e);
     attachGesture();
   });
   box.addEventListener("dblclick", () => confirm());
 
-  // 手势跟踪（v2.8.19）：监听挂 window 捕获阶段——不受 shadow DOM 事件目标、
-  // 指针捕获丢失、iframe 抢焦点影响，事件必定到达。此前挂在 stage 上依赖指针
-  // 捕获重定向，v2.8.18 的 blur 清 drag 在「同页 iframe 抢焦点」（顶层 window
-  // 派发 blur 但事件仍在流动、按键仍按住）误杀手势——用户实锤「拖几像素就停」，
-  // Playwright 复现实锤 dragDiedAtSteal=true
+  // 手势跟踪（v2.8.20 双通道）：window 捕获阶段（主路径，不受 shadow 目标/焦点
+  // 影响）+ stage 冒泡（兜底路径）。onGestureMove 幂等（applyDrag/setRectFrom
+  // 均为「快照+位移」确定性计算，同一事件双通道重复处理结果不变），无需去重
   function onGestureMove(e) {
+    logEv("move", e);
     if (!drag) { detachGesture(); return; }
     // 自愈守卫（v2.8.18）：泄漏路径吞掉 pointerup 时 drag 残留，纯移动会驱动
     // 渲染——无键移动一律视为拖拽已死，清状态并忽略本事件
@@ -221,20 +229,71 @@
       render();
     }
   }
+  function onGestureEnd(e) {
+    logEv(e && e.type === "pointercancel" ? "cancel" : "up", e);
+    detachGesture();
+  }
   function detachGesture() {
     drag = null;
-    window.removeEventListener("pointermove", onGestureMove, true);
-    window.removeEventListener("pointerup", detachGesture, true);
-    window.removeEventListener("pointercancel", detachGesture, true);
+    for (const ch of [[window, true], [stage, false]]) {
+      ch[0].removeEventListener("pointermove", onGestureMove, ch[1]);
+      ch[0].removeEventListener("pointerup", onGestureEnd, ch[1]);
+      ch[0].removeEventListener("pointercancel", onGestureEnd, ch[1]);
+    }
   }
   function attachGesture() {
-    window.addEventListener("pointermove", onGestureMove, true);
-    window.addEventListener("pointerup", detachGesture, true);
-    window.addEventListener("pointercancel", detachGesture, true);
+    for (const ch of [[window, true], [stage, false]]) {
+      ch[0].addEventListener("pointermove", onGestureMove, ch[1]);
+      ch[0].addEventListener("pointerup", onGestureEnd, ch[1]);
+      ch[0].addEventListener("pointercancel", onGestureEnd, ch[1]);
+    }
   }
   // 真失活才清拖拽（整窗失焦时 up 可能永远不来）；同页 iframe 抢焦点时
-  // document.hasFocus() 仍为 true 且指针事件正常流动，不清（本轮回归根因）
-  window.addEventListener("blur", () => { if (!document.hasFocus()) detachGesture(); });
+  // document.hasFocus() 仍为 true 且指针事件正常流动，不清（v2.8.19 回归根因）
+  window.addEventListener("blur", () => {
+    logEv("blur", null);
+    if (!document.hasFocus()) detachGesture();
+  });
+  // 原生 drag 劫持拦截（v2.8.20，本轮冻结根因）：浏览器把「按住拖动」升级为
+  // dragstart 后，pointer 事件流被 pointercancel@0,0 中途掐断、后续移动全部进
+  // drag 流（原始事件流实锤：降级手势 down→1 条 move→cancel，之后 pointermove
+  // 消失）——浮层存活期一律禁 drag（用户在框选，页面拖拽无意义）
+  window.addEventListener("dragstart", (e) => {
+    logEv("dragstart-blocked", null);
+    e.preventDefault();
+  }, true);
+
+  // 事件环形日志（v2.8.20 取证）：降级后「复制诊断」导出——机制定位靠真实事件流
+  const evLog = [];
+  try { window.__tabRecCropLog = evLog; } catch (e) {} // 诊断可读（隔离世界无害；harness 直接读）
+  function logEv(kind, e) {
+    evLog.push({
+      k: kind, t: Math.round(performance.now()),
+      x: e ? Math.round(e.clientX) : undefined, y: e ? Math.round(e.clientY) : undefined,
+      b: e ? e.buttons : undefined, m: drag ? drag.mode : null,
+      f: document.hasFocus(), p: renderPending,
+    });
+    if (evLog.length > 300) evLog.shift();
+  }
+  function copyDiag() {
+    const text = JSON.stringify({
+      ua: navigator.userAgent, dpr: window.devicePixelRatio,
+      vw: innerWidth, vh: innerHeight, log: evLog,
+    });
+    const done = () => { diagBtn.textContent = "已复制"; setTimeout(() => { diagBtn.textContent = "复制诊断"; }, 1500); };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(text).then(done, () => fallbackCopy(text, done));
+    } else fallbackCopy(text, done);
+  }
+  function fallbackCopy(text, done) {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.style.cssText = "position:fixed;left:-9999px;top:0;";
+    document.documentElement.appendChild(ta);
+    ta.select();
+    try { document.execCommand("copy"); done(); } catch (e) {}
+    ta.remove();
+  }
 
   root.querySelectorAll(".r").forEach((b) => {
     b.addEventListener("click", () => {
@@ -273,6 +332,7 @@
   }
 
   okBtn.addEventListener("click", confirm);
+  diagBtn.addEventListener("click", copyDiag);
   root.querySelector(".op.cancel").addEventListener("click", teardown);
   document.addEventListener("keydown", (e) => {
     if (!e.isTrusted) return;
