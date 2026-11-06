@@ -191,28 +191,8 @@
     drag = { mode: "draw", x0: e.clientX, y0: e.clientY };
     rect = { x: e.clientX, y: e.clientY, w: 0, h: 0 };
     render();
+    attachGesture();
   });
-  stage.addEventListener("pointermove", (e) => {
-    if (!drag) return;
-    // 自愈守卫（v2.8.18）：pointercancel/窗口失焦等泄漏路径会吞掉 pointerup，
-    // drag 残留时任何纯移动都会驱动渲染（用户实锤「松开后移动仍调尺寸」）——
-    // 无键移动一律视为拖拽已死，清状态并忽略本事件
-    if (e.buttons === 0) { drag = null; return; }
-    if (drag.mode === "draw") {
-      setRectFrom({ x: e.clientX, y: e.clientY });
-    } else {
-      rect = applyDrag(drag.mode, drag.rect0, e.clientX - drag.x0, e.clientY - drag.y0, ratio, innerWidth, innerHeight);
-      render();
-    }
-  });
-  const clearDrag = () => { drag = null; };
-  stage.addEventListener("pointerup", clearDrag);
-  // 手势接管/失焦泄漏源（v2.8.18）：这些路径浏览器不派发 pointerup——不监听
-  // 则 drag 永久残留，靠上面的 buttons 守卫兜底自愈
-  stage.addEventListener("pointercancel", clearDrag);
-  stage.addEventListener("lostpointercapture", clearDrag);
-  window.addEventListener("blur", clearDrag); // 拖拽中切窗口/失焦：up 事件可能丢失
-
   box.addEventListener("pointerdown", (e) => {
     if (!e.isTrusted || e.button !== 0 || !rect) return;
     // 句柄=边/角微调；框内（非句柄）=整体移动（v2.8.17）；双击=确认；
@@ -220,9 +200,41 @@
     const hn = e.target.closest && e.target.closest("[data-h]");
     stage.setPointerCapture(e.pointerId);
     drag = { mode: hn ? hn.dataset.h : "move", x0: e.clientX, y0: e.clientY, rect0: { ...rect } };
+    attachGesture();
   });
-  box.addEventListener("pointerup", clearDrag);
   box.addEventListener("dblclick", () => confirm());
+
+  // 手势跟踪（v2.8.19）：监听挂 window 捕获阶段——不受 shadow DOM 事件目标、
+  // 指针捕获丢失、iframe 抢焦点影响，事件必定到达。此前挂在 stage 上依赖指针
+  // 捕获重定向，v2.8.18 的 blur 清 drag 在「同页 iframe 抢焦点」（顶层 window
+  // 派发 blur 但事件仍在流动、按键仍按住）误杀手势——用户实锤「拖几像素就停」，
+  // Playwright 复现实锤 dragDiedAtSteal=true
+  function onGestureMove(e) {
+    if (!drag) { detachGesture(); return; }
+    // 自愈守卫（v2.8.18）：泄漏路径吞掉 pointerup 时 drag 残留，纯移动会驱动
+    // 渲染——无键移动一律视为拖拽已死，清状态并忽略本事件
+    if (e.buttons === 0) { detachGesture(); return; }
+    if (drag.mode === "draw") {
+      setRectFrom({ x: e.clientX, y: e.clientY });
+    } else {
+      rect = applyDrag(drag.mode, drag.rect0, e.clientX - drag.x0, e.clientY - drag.y0, ratio, innerWidth, innerHeight);
+      render();
+    }
+  }
+  function detachGesture() {
+    drag = null;
+    window.removeEventListener("pointermove", onGestureMove, true);
+    window.removeEventListener("pointerup", detachGesture, true);
+    window.removeEventListener("pointercancel", detachGesture, true);
+  }
+  function attachGesture() {
+    window.addEventListener("pointermove", onGestureMove, true);
+    window.addEventListener("pointerup", detachGesture, true);
+    window.addEventListener("pointercancel", detachGesture, true);
+  }
+  // 真失活才清拖拽（整窗失焦时 up 可能永远不来）；同页 iframe 抢焦点时
+  // document.hasFocus() 仍为 true 且指针事件正常流动，不清（本轮回归根因）
+  window.addEventListener("blur", () => { if (!document.hasFocus()) detachGesture(); });
 
   root.querySelectorAll(".r").forEach((b) => {
     b.addEventListener("click", () => {
