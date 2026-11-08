@@ -142,6 +142,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
           await ensureOffscreen();
           await chrome.storage.session.set({ recording: true, tabId, mode: payload.mode, startedAt: Date.now() });
           const resp = await sendOffscreen({ type: "offscreen-schedule", settings, payload, tabId });
+          if (resp && resp.ok === false) {
+            // offscreen 明确拒绝（审计 M2 v2.8.21）：回滚录制旗标——否则 catch 不
+            // 覆盖此路径，session.recording 残留把用户锁死在「已有录制进行中」
+            await chrome.storage.session.remove(["recording", "tabId", "startedAt"]);
+            setBadge("", "");
+          }
           sendResponse(resp || { ok: true });
         } catch (e) {
           await chrome.storage.session.remove(["recording", "tabId", "startedAt"]);
@@ -209,14 +215,16 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             sendResponse({ ok: true });
             break;
           }
+          // 播完事件广播给录制标签页所有帧：ended 可能在 iframe 的视频上，而
+          // 「下一节」入口在顶层文档——需要每个帧各自找入口点击（连播）。
+          // 仅录制中转发（审计 H1 v2.8.21）：录制结束后页面残留 detector 的
+          // ended 上报不得让扩展在非录制态点击页面（与 broadcast-advance 守卫对齐）
+          if (st.recording && msg.data && msg.data.ended) {
+            const tabId = sender.tab && sender.tab.id;
+            if (tabId != null) chrome.tabs.sendMessage(tabId, { type: "try-advance" }).catch(() => {});
+          }
         }
         if (await hasOffscreen()) chrome.runtime.sendMessage({ type: "offscreen-content", data: msg.data }).catch(() => {});
-        // 播完事件广播给录制标签页所有帧：ended 可能在 iframe 的视频上，而「下一节」
-        // 入口在顶层文档——需要每个帧各自找入口点击（连播）。
-        if (msg.data && msg.data.ended) {
-          const tabId = sender.tab && sender.tab.id;
-          if (tabId != null) chrome.tabs.sendMessage(tabId, { type: "try-advance" }).catch(() => {});
-        }
         sendResponse({ ok: true });
         break;
       }
@@ -270,7 +278,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case "advance-clicked": {
-        // 连播点击成功 → offscreen 从 between 立即续录（新节内容零丢失）
+        // 连播点击成功 → offscreen 从 between 立即续录（新节内容零丢失）。
+        // 跨帧冷却时间戳在 SW（可信上下文）写入（审计 H2 v2.8.21）：v2.7.1 撤销
+        // setAccessLevel 后 content script 对 storage.session 的 set 必 reject，
+        // 原内容侧直写被静默吞 → 冷却查询恒 0 → 多帧同轮广播各点一次跳课
+        //（v2.2.12 的 bug 静默回归）
+        chrome.storage.session.set({ lastAdvanceClick: Date.now() }).catch(() => {});
         chrome.runtime.sendMessage({ type: "offscreen-advance-clicked" }).catch(() => {});
         sendResponse({ ok: true });
         break;

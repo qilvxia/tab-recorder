@@ -40,6 +40,9 @@
   let splitTimer = null;
   let lastSplitAt = 0;
   let pendingFinalize = 0; // 正在收尾（blob→锚点注册）的段数：防"未注册先判完成"
+  let stopPending = 0; // [recorder.stop(), onstop) 异步窗口计数（审计 M1 v2.8.21）：
+  //   窗口内 maybeFinish（tick/anchor-landed 触发）会提前结算→resumeCapture 替换
+  //   cur→悬挂 onstop 的 finalizeSegment(cur) 落在空新段→整段静默丢失
   const SEG = {
     debounceMs: 1500, silenceSec: 5,
     urlStableMs: 3000, // URL 变化需稳定这么久才切节：进度/token 类参数会持续变化，永不稳定→不切
@@ -544,7 +547,17 @@
   }
 
   function stopAll(reason, keepOffscreen, discard) {
-    if (state === "stopping" || state === "idle") return { ok: true };
+    if (state === "stopping") return { ok: true };
+    if (state === "idle") {
+      // 审计 M2 v2.8.21：offscreen 异常消亡后被 stop 重建的 idle 文档必须回发
+      // recording-finished——否则 background 的 session.recording 旗标永不清除，
+      // 用户被「已有录制进行中」锁死到重载扩展。处理器幂等，重复发送无害
+      chrome.runtime.sendMessage({
+        type: "recording-finished",
+        summary: { mode, segments: [], last: "" },
+      }).catch(() => {});
+      return { ok: true };
+    }
     // 自动停止类原因面板可见（复验免开 F12 一击定位；manual 等不占"切节"语义）
     if (["video-stopped", "video-ended", "preset", "idle-wrap"].includes(reason)) {
       lastSplitInfo = { reason, at: now() };
@@ -576,10 +589,12 @@
     const deadline = now() + SEG.finishDeadlineMs; // 大文件落定上限 5 分钟
     if (resumeTs !== null) { const t = now(); activeBaseSeg += t - resumeTs; activeBaseTotal += t - resumeTs; resumeTs = null; }
     if (recorder && recorder.state !== "inactive") {
+      const seg = cur; // 先捕获段引用（审计 M1）：onstop 异步派发，窗口内 cur 可能已被换段
+      stopPending++; // stop→onstop 窗口禁 maybeFinish 抢跑
       recorder.onstop = discard
-        ? () => { console.info("[rec] 丢弃当前段（停止不保存）:", cur && cur.bytes, "bytes"); maybeFinish(); }
-        : () => finalizeSegment(cur).then(maybeFinish);
-      try { recorder.stop(); } catch (e) { maybeFinish(); }
+        ? () => { stopPending--; console.info("[rec] 丢弃当前段（停止不保存）:", seg && seg.bytes, "bytes"); maybeFinish(); }
+        : () => { stopPending--; finalizeSegment(seg).then(maybeFinish); };
+      try { recorder.stop(); } catch (e) { stopPending--; maybeFinish(); }
     } else {
       maybeFinish();
     }
@@ -614,6 +629,7 @@
 
   function maybeFinish() {
     if (state !== "stopping") return;
+    if (stopPending > 0) return; // stop→onstop 异步窗口内不结算（审计 M1）
     if (pendingFinalize > 0) return; // 还有段的收尾没走完，等它把锚点注册进来
     if (pauseAfterStop) {
       // 切节进 between：不等锚点下载确认——offscreen 文档不关闭，下载由浏览器
@@ -733,14 +749,16 @@
     // 收尾关文档，悬挂的本 onstop/finalizeSegment 被杀——最后一段数据丢失。
     // 保留引用让 stopAll 走 recorder.stop() 正常路径（stop 对 inactive 幂等）。
     if (!old || old.state === "inactive") { startSegment(); return; }
+    stopPending++; // stop→onstop 窗口禁 maybeFinish 抢跑（审计 M1：手动 stop 命中窗口时 stopAll 直调 maybeFinish 的同族路径）
     old.onstop = () => {
+      stopPending--;
       finalizeSegment(seg).then(maybeFinish); // 停止恰发生在切节收尾期间时，也要补完成判定
       // 仅 recording 开新段；paused（stop→onstop 毫秒窗内恰好 pause）延迟到
       // resume 再开，防"新段实录而计时按暂停"的错位
       if (state === "recording") startSegment();
       else if (state === "paused") pendingStartAfterResume = true;
     };
-    try { old.stop(); } catch (e) { console.warn(e); startSegment(); }
+    try { old.stop(); } catch (e) { stopPending--; console.warn(e); startSegment(); }
   }
 
   // URL 变化统一入口：只挂起不切节，等稳定期由 tick 判定（content 与 SW 两条路径都走这里）

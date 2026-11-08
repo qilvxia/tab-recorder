@@ -248,20 +248,35 @@
       ch[0].addEventListener("pointercancel", onGestureEnd, ch[1]);
     }
   }
-  // 真失活才清拖拽（整窗失焦时 up 可能永远不来）；同页 iframe 抢焦点时
-  // document.hasFocus() 仍为 true 且指针事件正常流动，不清（v2.8.19 回归根因）
-  window.addEventListener("blur", () => {
+  // 页面级监听（具名，teardown 逐一移除——审计 H3 v2.8.21：teardown 只删 host
+  // 不清这些监听的话，dragstart 拦截会把该页原生拖拽永久禁用直到刷新、闭包泄漏）
+  function onBlur() {
+    if (done) return;
     logEv("blur", null);
+    // 真失活才清拖拽（整窗失焦时 up 可能永远不来）；同页 iframe 抢焦点时
+    // document.hasFocus() 仍为 true 且指针事件正常流动，不清（v2.8.19 回归根因）
     if (!document.hasFocus()) detachGesture();
-  });
-  // 原生 drag 劫持拦截（v2.8.20，本轮冻结根因）：浏览器把「按住拖动」升级为
+  }
+  // 原生 drag 劫持拦截（v2.8.20，冻结根因）：浏览器把「按住拖动」升级为
   // dragstart 后，pointer 事件流被 pointercancel@0,0 中途掐断、后续移动全部进
-  // drag 流（原始事件流实锤：降级手势 down→1 条 move→cancel，之后 pointermove
-  // 消失）——浮层存活期一律禁 drag（用户在框选，页面拖拽无意义）
-  window.addEventListener("dragstart", (e) => {
+  // drag 流（原始事件流实锤）——浮层存活期一律禁 drag（用户在框选，页面拖拽无意义）
+  function onDragStart(e) {
+    if (done) return;
     logEv("dragstart-blocked", null);
     e.preventDefault();
-  }, true);
+  }
+  function onKeyDown(e) {
+    if (done || !e.isTrusted) return;
+    if (e.key === "Escape") teardown();
+    else if (e.key === "Enter" && rect && rect.w >= MIN_W && rect.h >= MIN_H) confirm();
+  }
+  function onRuntimeMsg(m) {
+    if (m && m.type === "crop-selector-cancel") teardown();
+  }
+  window.addEventListener("blur", onBlur);
+  window.addEventListener("dragstart", onDragStart, true);
+  document.addEventListener("keydown", onKeyDown, true);
+  chrome.runtime.onMessage.addListener(onRuntimeMsg);
 
   // 事件环形日志（v2.8.20 取证）：降级后「复制诊断」导出——机制定位靠真实事件流
   const evLog = [];
@@ -309,6 +324,12 @@
   function teardown() {
     if (done) return;
     done = true;
+    detachGesture(); // 进行中的拖拽手势随浮层终结（卸 window/stage 双通道监听）
+    window.removeEventListener("blur", onBlur);
+    window.removeEventListener("dragstart", onDragStart, true);
+    document.removeEventListener("keydown", onKeyDown, true);
+    chrome.runtime.onMessage.removeListener(onRuntimeMsg);
+    try { delete window.__tabRecCropLog; } catch (e) {}
     host.remove();
     delete window.__tabRecCropSelector;
   }
@@ -334,15 +355,6 @@
   okBtn.addEventListener("click", confirm);
   diagBtn.addEventListener("click", copyDiag);
   root.querySelector(".op.cancel").addEventListener("click", teardown);
-  document.addEventListener("keydown", (e) => {
-    if (!e.isTrusted) return;
-    if (e.key === "Escape") teardown();
-    else if (e.key === "Enter" && rect && rect.w >= MIN_W && rect.h >= MIN_H) confirm();
-  }, true);
-
-  chrome.runtime.onMessage.addListener((m) => {
-    if (m && m.type === "crop-selector-cancel") teardown();
-  });
 
   document.documentElement.appendChild(host);
 })();

@@ -183,7 +183,9 @@
       advTimers.forEach(clearTimeout);
       advTimers = [];
       lastClickAt = Date.now();
-      chrome.storage.session.set({ lastAdvanceClick: Date.now() }).catch(() => {});
+      // 跨帧冷却时间戳不在内容侧写 storage.session（审计 H2 v2.8.21）：untrusted
+      // 上下文的 set 必 reject 且上下文失效窗口还会同步抛——由 SW 在收到
+      // advance-clicked 时写入（帧内冷却仍用上面的 lastClickAt）
       // 点击成功即时回报：offscreen 收到后从 between 立即续录（早于页面导航），
       // 新节内容零丢失——否则恢复要等 URL 稳定 3s，新节自动开播的头几秒会漏录
       try { chrome.runtime.sendMessage({ type: "advance-clicked" }); } catch (e) {}
