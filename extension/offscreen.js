@@ -12,7 +12,7 @@
   let recStream = null; // 实际进 MediaRecorder 的流：裁剪时=canvas 合成流，否则原 tabCapture 流
   let cropPipe = null; // 裁剪管线 {video, canvasStream, timer}
   let crop = null; // {rect, viewportW, viewportH}（schedule 时从 payload 解析）
-  let cropOut = null; // 实际输出尺寸 {w,h} 与映射参数 {vw,vh,scale,letterbox}
+  let cropOut = null; // 实际输出尺寸 {w,h} 与映射参数 {vw,vh,scale,offsetX,offsetY}
   let cropError = "";
   let cropMismatch = null; // 框选快照 vs 开录实测错配（v2.8.15 换屏防呆，popup 侧算好传入）
   let captureSize = null; // 捕获帧尺寸 {w,h}（视频轨 getSettings，无裁剪时也可见）
@@ -111,6 +111,7 @@
   let pendingTabId = null;
   let captureRequested = false;
   let startError = "";
+  let cancelledReported = false; // 本场「预约期取消」是否已上报（防 requestCapture 失败/取消路径二次覆盖 lastSummary）
 
   let countdownTimer = null;
   let countEndTs = 0;
@@ -367,7 +368,9 @@
       await beginCapture(resp.streamId);
     } catch (e) {
       startError = String(e && e.message || e);
+      if (cancelledReported) return; // 取消已由 stopAll 上报，失败路径不覆盖 lastSummary（审计低项）
       state = "idle";
+      wrapStatus = null;
       stopLoops();
       destroyExtra();
       updateBadge();
@@ -412,22 +415,22 @@
       captureSize = { w: vs.width || 0, h: vs.height || 0 };
     } catch (e) { captureSize = null; }
 
+    stream.getVideoTracks()[0].addEventListener("ended", () => stopAll("stream-ended"));
+
+    if (state !== "countdown") {
+      // getUserMedia 期间被取消（取消上报已由 stopAll 完成，不重发——审计低项）
+      try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
+      return;
+    }
+
     // 回环：tabCapture 后原标签页静音，必须把音频接回扬声器才能边录边听。
     // （静默检测的信号源是 content-detect 上报的 playing，不在此音频路径上）
+    // 创建在取消检查之后（审计低项）：取消路径不再创建 audioCtx，免泄漏兜底
     try {
       audioCtx = new AudioContext();
       audioCtx.createMediaStreamSource(new MediaStream(stream.getAudioTracks())).connect(audioCtx.destination);
       audioCtx.resume().catch(() => {});
     } catch (e) { console.warn("loopback failed", e); }
-
-    stream.getVideoTracks()[0].addEventListener("ended", () => stopAll("stream-ended"));
-
-    if (state !== "countdown") {
-      // getUserMedia 期间被取消
-      try { stream.getTracks().forEach((t) => t.stop()); } catch (e) {}
-      chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
-      return;
-    }
     // 区域裁剪：构建 canvas 合成流（失败自动降级全画面，不阻塞录制）
     recStream = stream;
     if (crop) {
@@ -495,6 +498,8 @@
     resetContestState(); // 竞争/挂起类集中重置（含 prevHighRank/entryDismissedAt 等）
     captureRequested = false;
     startError = "";
+    cancelledReported = false; // 取消上报状态按场重置
+    wrapStatus = null;
     recStream = null;
     cropOut = null;
     cropError = "";
@@ -502,6 +507,8 @@
     curViewport = null;
     viewportDrift = false;
     pendingAnchors.clear(); // 上一场未落定的锚点残留会让本场 maybeFinish 卡到 deadline
+    for (const u of anchorURLs.values()) { try { URL.revokeObjectURL(u); } catch (e) {} }
+    anchorURLs.clear(); // 上一场未确认锚点的 blob URL 不带入本场（审计低项：防滞留至文档关闭）
     anchorName = "";
     activeBaseSeg = 0;
     activeBaseTotal = 0;
@@ -567,6 +574,7 @@
       // 节间等待中停止（手动/定时到点/收工）：已录节全部落盘，正常收尾上报
       //（原 cancelled:true 会丢失"已保存 N 节"信息）
       state = "idle";
+      wrapStatus = null; // 收工判定状态不残留到空闲（观测面污染，审计低项）
       stopLoops();
       updateBadge();
       chrome.runtime.sendMessage({
@@ -578,6 +586,8 @@
     if (state === "countdown" && !captureRequested) {
       // 预约期取消：尚未取流，干净退出、无任何文件
       state = "idle";
+      wrapStatus = null;
+      cancelledReported = true; // requestCapture/beginCapture 的取消路径不再二次上报（审计低项：防 lastSummary 被覆盖）
       stopLoops();
       updateBadge();
       chrome.runtime.sendMessage({ type: "recording-finished", summary: { cancelled: true } }).catch(() => {});
@@ -651,6 +661,7 @@
     }
     if (pendingAnchors.size === 0 || now() > finishDeadline) {
       state = "idle";
+      wrapStatus = null;
       stopLoops();
       destroyExtra();
       chrome.runtime.sendMessage({
@@ -703,17 +714,19 @@
 
   // ---- 分节信号 ----
   // 返回 true = 已接受（排队/执行）；false = 被全局间隔拒绝（调用方可保留挂起重试）
+  let pendingSplitReason = ""; // 去抖窗内合并信号时记最新原因（审计低项：防 lastSplitInfo 记首因误导诊断）
   function requestSplit(reason) {
     if (state !== "recording" || mode !== "segment") return false;
     if (now() - lastSplitAt < SEG.minSplitGapMs) {
       console.info("[rec] split 推迟（全局间隔未到）:", reason);
       return false;
     }
-    if (splitTimer) return true; // 已在排队，去抖合并
+    if (splitTimer) { pendingSplitReason = reason; return true; } // 已在排队，去抖合并（记最新原因）
     console.info("[rec] split signal:", reason);
+    pendingSplitReason = reason;
     splitTimer = setTimeout(() => {
       splitTimer = null;
-      doSplit(reason);
+      doSplit(pendingSplitReason);
     }, SEG.debounceMs);
     return true;
   }
@@ -1181,6 +1194,12 @@
 
   // ---- 消息入口 ----
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+    // 入口纵深防御（审计低项 v2.8.22）：本组件只接受扩展自身上下文（SW/popup/
+    // 扩展页）的消息——正常链路全部如此（内容脚本经 SW 转发），异常来源直接拒
+    if (sender.url && !String(sender.url).startsWith(chrome.runtime.getURL(""))) {
+      sendResponse({ ok: false, error: "untrusted sender" });
+      return;
+    }
     switch (msg && msg.type) {
       case "offscreen-schedule":
         try {
@@ -1200,11 +1219,6 @@
       case "offscreen-content": onContent(msg.data); sendResponse({ ok: true }); break;
       case "offscreen-url":
         onUrlChange(msg.url);
-        sendResponse({ ok: true });
-        break;
-      case "offscreen-audible":
-        // 历史遗留空协议（tab.audible 方案已废，静默判定走 playing 信号）——
-        // background 侧仍发送以维持时序，此处仅应答
         sendResponse({ ok: true });
         break;
       case "offscreen-advance-clicked":
@@ -1251,11 +1265,6 @@
         sendResponse({ ok: true });
         break;
       }
-      case "offscreen-audible":
-        // 历史遗留空协议（tab.audible 方案已废，静默判定走 playing 信号）——
-        // background 侧仍发送以维持时序，此处仅应答
-        sendResponse({ ok: true });
-        break;
     }
   });
 })();

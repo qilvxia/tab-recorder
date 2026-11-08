@@ -306,7 +306,9 @@
     ta.style.cssText = "position:fixed;left:-9999px;top:0;";
     document.documentElement.appendChild(ta);
     ta.select();
-    try { document.execCommand("copy"); done(); } catch (e) {}
+    let ok = false;
+    try { ok = document.execCommand("copy"); } catch (e) {}
+    if (ok) done(); else { diagBtn.textContent = "复制失败"; setTimeout(() => { diagBtn.textContent = "复制诊断"; }, 1500); }
     ta.remove();
   }
 

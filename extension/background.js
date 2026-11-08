@@ -86,7 +86,6 @@ async function injectDetector(tabId, settings, mode) {
         type: "detect-config",
         cfg: {
           lessonSelector: (settings && settings.lessonSelector) || "h1",
-          lessonPrefix: (settings && settings.lessonPrefix) || "",
           autoNext: mode === "segment" && (settings && settings.autoNext !== false),
         },
       }).catch(() => {});
@@ -140,17 +139,17 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
             break;
           }
           await ensureOffscreen();
-          await chrome.storage.session.set({ recording: true, tabId, mode: payload.mode, startedAt: Date.now() });
+          await chrome.storage.session.set({ recording: true, tabId, mode: payload.mode });
           const resp = await sendOffscreen({ type: "offscreen-schedule", settings, payload, tabId });
           if (resp && resp.ok === false) {
             // offscreen 明确拒绝（审计 M2 v2.8.21）：回滚录制旗标——否则 catch 不
             // 覆盖此路径，session.recording 残留把用户锁死在「已有录制进行中」
-            await chrome.storage.session.remove(["recording", "tabId", "startedAt"]);
+            await chrome.storage.session.remove(["recording", "tabId"]);
             setBadge("", "");
           }
           sendResponse(resp || { ok: true });
         } catch (e) {
-          await chrome.storage.session.remove(["recording", "tabId", "startedAt"]);
+          await chrome.storage.session.remove(["recording", "tabId"]);
           setBadge("", "");
           sendResponse({ ok: false, error: String(e && e.message || e) });
         }
@@ -189,17 +188,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
         break;
       }
       case "status": {
-        const { advanceLog } = await chrome.storage.session.get("advanceLog");
         if (await hasOffscreen()) {
           try {
-            const st = await chrome.runtime.sendMessage({ type: "offscreen-status" });
-            st.advanceLog = advanceLog || [];
-            sendResponse(st);
+            sendResponse(await chrome.runtime.sendMessage({ type: "offscreen-status" }));
           } catch {
-            sendResponse({ state: "idle", advanceLog: advanceLog || [] });
+            sendResponse({ state: "idle" });
           }
         } else {
-          sendResponse({ state: "idle", last: (await chrome.storage.session.get("lastSummary")).lastSummary, advanceLog: advanceLog || [] });
+          sendResponse({ state: "idle", last: (await chrome.storage.session.get("lastSummary")).lastSummary });
         }
         break;
       }
@@ -368,7 +364,7 @@ chrome.runtime.onMessage.addListener((msg) => {
   if (msg && msg.type === "recording-finished") {
     (async () => {
       await chrome.storage.session.set({ lastSummary: msg.summary || null });
-      await chrome.storage.session.remove(["recording", "tabId", "startedAt"]);
+      await chrome.storage.session.remove(["recording", "tabId"]);
       setBadge("", "");
       if (await hasOffscreen()) {
         await chrome.offscreen.closeDocument().catch(() => {});

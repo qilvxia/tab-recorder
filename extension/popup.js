@@ -5,7 +5,7 @@ const DEFAULT_SETTINGS = {
   format: "mp4", videoBitrate: 4000000, frameRate: 30, audioBitrate: 128000,
   startDelaySeconds: 0, autoNext: true, segUrlMode: false, silenceWrapSeconds: 60,
   recordKind: "av",
-  lessonSelector: "h1", lessonPrefix: "^正在播放[:：]\\s*",
+  lessonSelector: "h1",
 };
 
 const SRC_LABEL = {
@@ -41,15 +41,19 @@ function fmtMB(bytes) {
   return (bytes / 1048576).toFixed(1) + " MB";
 }
 
+let settingsCache = null; // 内存单点（审计低项 v2.8.22）：读改写竞态（两次 onchange
+// 在存储往返窗口交错丢写）改为缓存整写——loadSettings 填充后一切写经此对象
+
 async function loadSettings() {
   const st = await chrome.storage.local.get("settings");
-  return Object.assign({}, DEFAULT_SETTINGS, st.settings || {});
+  settingsCache = Object.assign({}, DEFAULT_SETTINGS, st.settings || {});
+  return settingsCache;
 }
 
 async function saveSetting(key, value) {
-  const cur = await loadSettings();
-  cur[key] = value;
-  await chrome.storage.local.set({ settings: cur });
+  if (!settingsCache) await loadSettings();
+  settingsCache[key] = value;
+  await chrome.storage.local.set({ settings: settingsCache });
 }
 
 const isBrowserPage = (url) => !!(url && /^(chrome|edge|about|chrome-extension):/i.test(url));
@@ -374,8 +378,12 @@ async function runRecognitionDiag() {
       return { frame: fr.url, videos, playerButtons: (fr.btns || []).slice(0, 4), playbackState: fr.playbackState };
     });
     const json = JSON.stringify(report);
-    await navigator.clipboard.writeText(json).catch(() => {});
-    showErr("已复制到剪贴板（" + json.length + " 字符），粘贴给开发者即可。" + json.slice(0, 260));
+    // 剪贴板写失败如实提示（审计低项：原 catch 吞掉后仍说「已复制」误导）
+    let copied = true;
+    try { await navigator.clipboard.writeText(json); } catch (e) { copied = false; }
+    showErr(copied
+      ? "已复制到剪贴板（" + json.length + " 字符），粘贴给开发者即可。" + json.slice(0, 260)
+      : "复制到剪贴板失败（" + json.length + " 字符），请手动从下方复制：" + json.slice(0, 260));
   } catch (e) {
     showErr("采集失败：" + String(e && e.message || e).slice(0, 120));
   }
@@ -383,17 +391,22 @@ async function runRecognitionDiag() {
   btn.textContent = "识别诊断（采集本页播放/标题识别状态，复制到剪贴板）";
 }
 
+let errTimer = 0;
 function showErr(text) {
   let el = document.querySelector(".err");
   if (!el) {
     el = document.createElement("div");
     el.className = "err";
-    $("idleBox").appendChild(el);
+    // 挂面板根（审计低项 v2.8.22）：挂 idleBox 时录制态（idleBox 隐藏）错误不可见
+    document.body.appendChild(el);
   }
   el.textContent = text;
   el.style.color = "#e5484d";
   el.style.fontSize = "11.5px";
   el.style.marginTop = "6px";
+  // 10s 自动清除（审计低项：原永驻到面板关闭）
+  clearTimeout(errTimer);
+  errTimer = setTimeout(() => { el.remove(); }, 10000);
 }
 
 function pollSoon(ms) {

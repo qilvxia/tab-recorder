@@ -12,7 +12,7 @@
 
   let cfg = { lessonSelector: "h1", autoNext: false };
   let last = { lesson: "", lessonSrc: "", lessonAlt: "", url: "", ended: false, endedAt: 0, playing: false, entryVisible: false, viewport: null };
-  const seenVideos = new Set();
+  const seenVideos = new WeakSet(); // WeakSet（审计低项）：用法仅 has/add，不强持有 video 元素（SPA 长会话防泄漏）
 
   // ---- 自动连播（分节模式）：播完后尝试点击「下一节」入口 ----
   let advTimers = [];
