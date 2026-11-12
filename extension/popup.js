@@ -128,11 +128,13 @@ async function init() {
       await saveSetting("recordKind", btn.dataset.kind);
     };
   });
-  // 高级设置（v1 默认值：4Mbps / 30fps / 128kbps）
+  // 高级设置（v1 默认值：4Mbps / 30fps / 128kbps）。音频码率单位修复（v2.8.23）：
+  // 标签以 kbps 计，显示 ÷1e3、保存 ×1e3（storage 始终存 bps，offscreen 消费侧不动）；
+  // 旧版显示 bps 原值且保存无换算——按标签输入 128 会存成 128bps
   $("videoBitrate").value = (s.videoBitrate || 4000000) / 1e6;
   $("frameRate").value = s.frameRate || 30;
-  $("audioBitrate").value = s.audioBitrate || 128000;
-  for (const [id, key, mul] of [["videoBitrate", "videoBitrate", 1e6], ["frameRate", "frameRate", 1], ["audioBitrate", "audioBitrate", 1]]) {
+  $("audioBitrate").value = (s.audioBitrate || 128000) / 1e3;
+  for (const [id, key, mul] of [["videoBitrate", "videoBitrate", 1e6], ["frameRate", "frameRate", 1], ["audioBitrate", "audioBitrate", 1e3]]) {
     $(id).onchange = async () => {
       await saveSetting(key, Math.max(1, Number($(id).value) || 0) * mul);
     };
